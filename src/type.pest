@@ -1,0 +1,8 @@
+Primitive = {"b" ~ ('1'..'9') ~ ('0'..'9')*}
+Null = {"0"}
+List = {"[" ~ Type ~ "]"}
+Vector = {"<" ~ Type ~ ">"}
+Struct = {"(" ~ Type ~ ("," ~ Type)+ ~ ")"}
+Union = {"{" ~ NullableType ~ ("," ~ Type)+ ~ "}"}
+Type = _{Primitive | List | Vector | Struct | Union}
+NullableType = _{Type | Null}
