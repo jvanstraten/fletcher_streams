@@ -1,3 +1,5 @@
+# NOTE: WORK IN PROGRESS. NOT A REAL SPEC YET.
+
 Fletcher stream specification
 =============================
 
