@@ -1,8 +1,10 @@
+WHITESPACE = _{ " " | "\t" | "\n" }
 Primitive = {"b" ~ ('1'..'9') ~ ('0'..'9')*}
 Null = {"0"}
 List = {"[" ~ Type ~ "]"}
 Vector = {"<" ~ Type ~ ">"}
 Struct = {"(" ~ Type ~ ("," ~ Type)+ ~ ")"}
 Union = {"{" ~ NullableType ~ ("," ~ Type)+ ~ "}"}
-Type = _{Primitive | List | Vector | Struct | Union}
+Name = {(ASCII_ALPHANUMERIC | "_")+}
+Type = _{(Primitive | List | Vector | Struct | Union) ~ (Name)?}
 NullableType = _{Type | Null}
