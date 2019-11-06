@@ -1,10 +1,16 @@
 WHITESPACE = _{ " " | "\t" | "\n" }
-Primitive = {"b" ~ ('1'..'9') ~ ('0'..'9')*}
-Null = {"0"}
-List = {"[" ~ Type ~ "]"}
-Vector = {"<" ~ Type ~ ">"}
-Struct = {"(" ~ Type ~ ("," ~ Type)+ ~ ")"}
-Union = {"{" ~ NullableType ~ ("," ~ Type)+ ~ "}"}
-Name = {(ASCII_ALPHANUMERIC | "_")+}
-Type = _{(Primitive | List | Vector | Struct | Union) ~ (Name)?}
-NullableType = _{Type | Null}
+Bits = { "b" ~ ('1'..'9') ~ ('0'..'9')* }
+Null = { "NULL" }
+Name = { ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+
+Element = { (Name ~ ":")? ~ Type }
+NullableElement = _{ Element | Null }
+
+Struct = { "(" ~ Element ~ ("," ~ Element)* ~ ","? ~ ")" }
+Union  = { "{" ~ NullableElement ~ ("," ~ Element)+ ~ ","? ~ "}" }
+List   = { "[" ~ Element ~ "]" }
+Vector = { "<" ~ Element ~ ">" }
+
+Type = _{ Bits | List | Vector | Struct | Union }
+
+Root = _{ SOI ~ Element ~ EOI }
