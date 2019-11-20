@@ -184,6 +184,9 @@ fn to_bundle(node: pest::iterators::Pair<Rule>, name: Option<&str>) -> StreamBun
                     }
                     bundle.secondary.extend(sub.secondary.drain(..));
                 }
+                if bundle.primary.element_type.is_empty() {
+                    bundle.primary = bundle.secondary.remove(0);
+                }
                 return bundle;
             }
             Rule::Union => {

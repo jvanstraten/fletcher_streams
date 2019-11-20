@@ -77,34 +77,97 @@ version of the hardware IP library to convert between the suggested format and
 the Arrow in-memory format is available from the Fletcher project, maintained
 by TU Delft.
 
-Interface signals common to all streams
----------------------------------------
+Logical vs. physical streams
+----------------------------
 
-Fletcher streams consist of a selection of the following signals, not including
-clock and reset. All signals are synchronous to a common clock domain.
+Most of the more complex data types supported by Arrow do not have a fixed
+memory footprint per data element. The most common example of this is an array
+of strings. Arrow represents these data types as two separate columnar blocks
+of memory. In Arrow, these blocks are called buffers, while the logical dataset
+they together represent are called arrays. The streaming format requires a
+similar abstraction: the streaming representation of an array is called a
+logical stream, which is made up of one or more physical streams. Note,
+however, that a physical stream is not necessarily equivalent to a buffer; the
+streaming format attempts to minimize the number of independent streams as this
+complicates the control logic.
 
-| Name    | Origin | Width | Default | Purpose                                                       |
-|---------|--------|-------|---------|---------------------------------------------------------------|
-| `valid` | Source | 1     | `'1'`   | Stalling the data stream due to the source not being ready.   |
-| `ready` | Sink   | 1     | `'1'`   | Stalling the data stream due to the sink not being ready.     |
-| `data`  | Source | N x M | n/a     | Data transfer of N M-bit elements.                            |
-| `empty` | Source | 1     | `'0'`   | Encoding zero-length packets.                                 |
-| `stai`  | Source | C     | 0       | Encodes the index of the first valid element in data.         |
-| `endi`  | Source | C     | N-1     | Encodes the index of the last valid element in data.          |
-| `last`  | Source | D     | `'1'`   | Indicating the last transfer for D levels of nested packets.  |
-| `ctrl`  | Source | U     | n/a     | Additional control information carried along with the stream. |
+For logical streams, we also make the distinction between (normal) linear
+streams and random-access streams. The latter includes a return channel that
+allows the sink to skip over elements or request elements again, while the
+former is a simpler and more conventional unidirectional data channel.
+Random-access streams bear some superficial resemblance to read-only
+memory-mapped AXI4, but they are fundamentally different: they represent a
+stream of an *array* of elements, where the sink can choose which elements it
+wants to access within the current array by means of their index. The primary
+use case for a random-access stream is to let a kernel access an Arrow array as
+it sees fit, while the host controls which arrays to access in sequence as part
+of independent kernel invocations.
 
-Where:
+Physical streams
+----------------
+
+Physical Fletcher streams consist of a selection of the following signals, not
+including clock and reset. All signals are synchronous to a common clock
+domain.
+
+| Name    | Origin | Width | Default   | Purpose                                                       |
+|---------|--------|-------|-----------|---------------------------------------------------------------|
+| `valid` | Source | 1     | `'1'`     | Stalling the data stream due to the source not being ready.   |
+| `ready` | Sink   | 1     | `'1'`     | Stalling the data stream due to the sink not being ready.     |
+| `data`  | Source | N x M | n/a       | Data transfer of N M-bit elements.                            |
+| `strb`  | Source | N     | all `'1'` | Encodes which lanes are valid.                                |
+| `stai`  | Source | C     | 0         | Encodes the index of the first valid element in data.         |
+| `endi`  | Source | C     | N-1       | Encodes the index of the last valid element in data.          |
+| `empty` | Source | 1     | `'0'`     | Encoding zero-length packets.                                 |
+| `last`  | Source | D     | all `'1'` | Indicating the last transfer for D levels of nested packets.  |
+| `ctrl`  | Source | U     | n/a       | Additional control information carried along with the stream. |
+
+These signals are described in detail in the following sections.
+
+In the table, the following parameters are used:
 
  - N is the maximum number of elements that can be transferred in a single
    cycle.
  - M is the bit-width of each element.
  - D is the dimensionality of the datatype represented by the stream, or
    alternatively, the packet nesting level.
- - C is the width of the `stai` and `endi` signals, which must be equal to
-   ceil(log2(N)).
+ - C is the width of the `stai` and `endi` signals, which must always be equal
+   to ceil(log2(N)).
  - U is the width of the `ctrl` signal, of which the significance is not
    defined by (this layer of) the specification.
+
+These parameters are defined by the requirements of the source and sink that
+the stream is connected to. The values for N, M, D, (and indirectly, C,) must
+be equal for the source and sink. U can be different, in which case the stream
+uses the maximum width of the values required by the source and sink, and the
+signal is resized on either side as if it were an unsigned number.
+
+In addition to these parameters, there is an additional "hidden" parameter
+called the normalization level (L). The higher this level, the more restricted
+the transfers on the stream are: the source has to conform to additional rules,
+while the sink can assume that these rules are adhered to. The levels are:
+
+ - Level 0: no additional rules imposed.
+ - Level 1: the `strobe` bits are always one.
+ - Level 2: `stai` is always zero. That is, if a transfer contains data, the
+   first element is always in the first lane.
+ - Level 3: the rules of level 2, and `endi` is always N-1 if `last` is 0. That
+   is, the element with index i is always in lane i mod N.
+ - Level 4: the rules of level 3, and `empty` is always `'0'` if `last` is 0.
+   That is, the `last` marker cannot be postponed to an independent transfer,
+   even if the total number of elements transfered is divisible by N.
+ - Level 5: the rules of level 4, but `empty` is always `'0'` regardless of
+   `last`. That is, empty sequences are not supported.
+ - Level 6: the rules of level 5, and `valid` is must remain `'1'` until `last`
+   a transfer with nonzero `last` is handshaked. That is, the stream is never
+   interrupted (unless backpressured through `ready`) during a packet.
+
+The normalization level provided by a source must be greater than or equal to
+the level expected by a sink, or behavior is undefined.
+
+It is possible to construct generic components that vary N and increase L from
+any level to level 3, allowing an otherwise incompatible source/sink pair to be
+connected.
 
 ### `valid` and `ready`
 
@@ -235,6 +298,231 @@ stream is passed through IP cores that are not or need not be aware of their
 significance.
 
  - The `ctrl` signal is don't-care while `valid` is not asserted.
+
+Logical streams
+---------------
+
+A single physical Fletcher stream can only transfer elements with a fixed size
+known at design time, or uniformly nested lists thereof. In order to transfer
+more complex data types, multiple physical streams have to work together, and
+additional specification is needed to specify which physical data bit does
+what.
+
+Before attempting to specify this, let us first formally describe the set of
+supported data types by means of a recursive grammar, defined as follows:
+
+    # Top-level rule
+    type = bits | list | vector | struct | union ;
+
+    # Comma-separated list of types
+    types = type
+          | type , "," , types ;
+
+    # Primitive type: a positive number of bits with undefined representation
+    bits = "b" , positive number ;
+
+    # Sequences types, mapping to Arrow arrays and nested lists
+    list = "[" , type , "]" ;
+    vector = "<" , type , ">" ;
+
+    # Concatenations of a number of elements with different types
+    struct = "(" , types , ")" ;
+
+    # Alternations of two or more different types, possibly including null
+    union = "{" , type , "," , types , "}"
+          | "{" , "NULL" , "," , types , "}" ;
+
+Each of these grammar construction rules is accompanied by a rule for
+constructing the set of physical streams needed to represent the logical
+stream for that type. To define these, we also need to formaly define what
+constitutes a logical stream. We define this as S physical streams with
+parameters M_i and D_i for physical stream i ∈ 0..S-1, where S ≥ 1. The first
+physical stream (i = 0) is referred to as the primary stream, while the zero
+or more other streams are referred to as the secondary streams. Within the
+physical streams, the physical data element is subdivided into one or more
+fields, ordered LSB-first.
+
+### Bits
+
+The `bits` type used to represent a primitive datum with a fixed number of
+bits B (denoted `b<B>` in the grammar, where `<B>` is the positive integer
+representing the number of bits). Common examples of this are signed and
+unsigned two's complement numbers, floating point numbers, and characters.
+The logical stream for the `bits` type has the following parameters:
+
+    S = 1
+    M_0 = B
+    D_0 = 0
+
+### Lists and vectors
+
+A `list` with element type `T` (denoted `[T]` in the grammar) represents a
+sequence of elements of type `T` of which the length is not known at
+design-time. It is important to realize at this point that for instance `[b8]`
+represents a stream of byte sequences, not just a stream of bytes — a stream
+of bytes has the type `b8`. For lists, these sequences are delimited by means
+of adding a `last` signal to each of the physical streams that represents `T`,
+thus:
+
+    S = S^T
+    M_i = S^T_i         | i ∈ 0..S-1
+    D_i = D^T_i + 1     | i ∈ 0..S-1
+
+A `vector` with element type `T` (denoted `<T>` in the grammar) also represents
+a sequence of elements of type `T` of which the length is not known at
+design-time, but the sequence boundaries are communicated by means of a (32-bit)
+length stream, flowing independently to the data stream. Thus:
+
+    S = S^T + 1
+    M_0 = 32
+    D_0 = D^T_0
+    M_i+1 = S^T_i       | i ∈ 0..S-1
+    D_i+1 = D^T_i       | i ∈ 0..S-1
+
+Sinks of vector streams may assume that the length of the vector is
+communicated to them before they have to start accepting the vector data.
+This allows the sink to for instance allocate space for the sequence before
+it processes it further. This means that components that produce vectors must
+ensure that this length is indeed made available before they wait for the sink
+to accept any element, or a deadlock can occur.
+
+Vectors are typically more complicated to implement properly, but can be more
+performant than lists. Specifically, a stream of type `[T]` can only transfer
+one `T` per cycle, regardless of its `N` parameter and the size of the list,
+due to the sequence boundary being encoded with the `last` control signal.
+Streams of vectors do not have this limitation; they can transfer `N_0`
+sequences per cycle, as long as the throughput is not limited by the widths of
+the secondary streams.
+
+A stream of vectors can be transformed into a stream of lists very simply, by
+counting the number of elements on the incoming secondary stream and indicating
+`last` when the element count hits the incoming length. The opposite is much
+more difficult however, as determining the sequence length requires consumption
+(and thus buffering) of the incoming data stream. Also, vectors are limited to
+2^32-1 elements, while list length is unbounded.
+
+### Structs
+
+A `struct` with element types `T`, `U`, ... (denoted `(T,U,...)`) represents a
+data type built up out of the concatenation of its element types (similar to a
+`struct` in C). The logical stream for such a `struct` is constructed with the
+following algorithm:
+
+    # An empty struct (if it would be legal) consists of a single primary
+    # stream with a zero-sized data element.
+    S = 1
+    M_0 = 0
+    D_0 = 0
+
+    for each element type T:
+        if D^T_0 = 0:
+            # Concatenate the data elements of the primary streams together,
+            # to reduce the number of physical streams for the struct as much
+            # as possible.
+            M_0 += M^T_0
+
+        else:
+            # When the struct element type is a list, we can't join the data
+            # with the other struct elements, so the list element stream
+            # becomes a secondary stream.
+            M_S = M^T_0
+            D_S = D^T_0
+            S += 1
+
+        # Append any secondary streams of the struct element to our list of
+        # secondary streams.
+        for i in 1 to S^T - 1:
+            M_S = M^T_i
+            D_S = D^T_i
+            S += 1
+
+    # If the struct contains only lists, the primary stream will still be
+    # empty. Since an empty stream makes no sense, we special-case it away.
+    if M_0 = 0:
+        S -= 1
+        for i in 0 to S - 1:
+            M_i = M_i+1
+            D_i = D_i+1
+
+For simple structures such as `(b1,b2)`, this means that the logical stream
+behaves as `b3` would, with the data elements concatenated LSB-first.
+
+### Unions
+
+A `union` with option types `T`, `U`, ... (denoted `{T,U,...}`) represents a
+data type built up out of the alternation of its option types (similar to a
+`union` in C). `union`s can also be nullable, in which case the first option
+(0) is reserved for null. The option chosen for each transfered union is
+encoded by means of a ceil(log(|options|))-bit unsigned number at the LSB end
+of the primary data stream element, where |options| is the number of options
+including null. The data is encoded similar to a struct, but the elements in
+the primary stream are overlapped (LSB-aligned). Any secondary streams of
+union options that have not been selected will not transfer any data (not even
+an empty sequence). The algorithm for constructing the logical stream of a
+union is as follows:
+
+    # The first field in the primary stream is the union option.
+    S = 1
+    M_0 = ceil(log2(|options|))
+    D_0 = 0
+
+    for each element type T:
+        if D^T_0 = 0:
+            # Overlap the data elements of the primary streams if possible.
+            M_0 = max(M_0, M^T_0)
+
+        else:
+            # When the union option type is a list, we don't merge the
+            # streams.
+            M_S = M^T_0
+            D_S = D^T_0
+            S += 1
+
+        # Append any secondary streams of the union option to our list of
+        # secondary streams.
+        for i in 1 to S^T - 1:
+            M_S = M^T_i
+            D_S = D^T_i
+            S += 1
+
+### Mapping between Arrow and Fletcher stream types
+
+Arrow types and Fletcher stream types do not map entirely one-to-one; in some
+cases there multiple Fletcher stream representations are possible. It is then
+up to the user to choose which representation is most suitable for the
+application, along with the N parameter for each physical stream.
+
+In general, the following mappings are possible.
+
+| Arrow type                      | Fletcher stream type                                        |
+|---------------------------------|-------------------------------------------------------------|
+| Non-nullable arrays             | `list` or `vector` of array type                            |
+| Nullable arrays                 | `list` or `vector` of `union` of null and the array type    |
+| Fixed-length primitive types    | `bits`                                                      |
+| Variable-length primitive types | `list` or `vector` of `bits`                                |
+| Nested lists                    | `list` or `vector`                                          |
+| Nested structs                  | `struct`                                                    |
+| Nested unions                   | `union`                                                     |
+| Dictionaries                    | encoded as dictionary index (`bits`) or as the mapped value |
+
+Random-access streams
+---------------------
+
+When data originates from a (chunked) Arrow array, allowing a kernel to perform
+random access costs very little, but greatly increases the potential for
+development of efficient solutions. This is
+
+
+
+
+
+
+
+
+
+
+
+
 
 Data type serialization
 -----------------------
@@ -369,12 +657,6 @@ alongside each other. The following semantics are defined:
 These streams may be "concatenated" in hardware when necessary; in
    this case, each signal (including `valid` and `ready`) is concatenated to
    a vector, LSB-first in struct order.
-
-
-
-
-
-
 
 Stream primitives
 -----------------
