@@ -1,303 +1,654 @@
 # NOTE: WORK IN PROGRESS. NOT A REAL SPEC YET.
 
-Fletcher stream specification
+OpenTide stream specification
 =============================
 
-Introduction
-------------
+Background and motivation
+-------------------------
 
-The Apache Arrow project standardizes a way to represent tabular data in linear
-memory, to allow high performance access to the table from within a multitude
-of programming languages and VMs without serialization. It also specifies a
-file format for serializing subsets of these tables (record batches) to files.
+As FPGAs become faster and larger, they are increasingly used within a
+data center context to accelerate computational workloads. FPGAs can already
+achieve greater compute density and power efficiency than CPUs and GPUs for
+certain types of workloads, particularly those that rely on high streaming
+throughput and branch-heavy computation. Examples of this are decompression,
+SQL query acceleration, and pattern matching. The major disadvantage of FPGAs
+is that they are more difficult to program than CPUs and GPUs, and that
+algorithms expressed imperatively in the CPU/GPU domain often need to be
+redesigned from the ground up to achieve competitive performance. Both the
+advantages and disadvantages are due to the spatial nature of an FPGA: instead
+of programming a number of processors, an FPGA designer "programs" millions of
+basic computational elements not much more complex than a single logic gate
+that all work parallel to each other, and describes how these elements are
+interconnected. This extreme programmability comes at a cost of roughly an
+order of magnitude in area and an order of magnitude in performance compared
+to the custom silicon used to make CPUs and GPUs. Therefore, while imperative
+algorithms can indeed be mapped to FPGAs more or less directly through
+high-level synthesis (HLS) techniques or the use of softcores, typically an
+algorithm needs at least two orders of magnitude of acceleration through clever
+use of the spatial nature of the FPGA to be competitive.
 
-Within the software and GPU world this is good enough, since the primitive
-instructions on these devices operate on memory. FPGA accelerators, on the
-other hand, typically operate on streams. In the same way that it makes sense
-to standardize an in-memory format between programming languages to leverage
-the strengths and libraries in each, it makes sense to standardize a streaming
-format in the FPGA domain, such that supporting computation kernels and
-libraries from different vendors can work together out of the box. Furthermore,
-an open hardware IP library containing components to connect this streaming
-format to the Arrow in-memory format is desirable.
+Unfortunately, the industry-standard toolchains needed to program FPGAs only
+take VHDL, Verilog, SystemC, (more recently through HLS) a subset of C++,
+and/or visually designed data flow graphs as their input. The first three
+provide few abstractions above the level of a single wire: while they do allow
+the use of data types such as integers and structures to represent bundles of
+wires, all control of what the voltages on those bundles of wires represent at
+a certain point in time (if anything) remains up to the programmer. The latter
+two techniques raise the bar slightly by presenting the designer with streams
+and memory. However, they are vendor-specific, often require additional
+licensing fees over the more traditional design entry methods, and in some
+cases are even specific to a certain version of the vendor tool and/or a
+certain FPGA device family.
 
-Over the past few years, AXI4 streams, part of the AMBA 4 specification by ARM,
-have become the de-facto standard for generic streaming interfaces. An AXI4
-stream consists of a `valid`/`ready` handshake, one or more byte lanes that can
-be individually masked, a `last` flag for one-dimensional packet boundaries,
-and routing information.
+This situation has given rise to a number of open-source projects that take
+higher-level languages and transform them to vendor-agnostic VHDL or Verilog.
+Examples of this are Chisel/FIRRTL and Clash, using generative Scala code and a
+Haskell-like functional programming language as their respective inputs. Both
+tools come with their own standard libraries of hardware components that can be
+used to compose accelerators out of smaller primitives, similar to the data
+flow design method described earlier, but with textual input and the advantage
+of being vendor and device agnostic.
 
-A naive approach to specifying an Arrow streaming format would be to simply
-require the use of such AXI4 streams. The first issue is then however what
-should be streamed. Serialized record batches? The individual column
-buffers in sequence, or perhaps interleaved? Clearly, the AXI4 specification
-on its own is not enough.
+With the advent of these data flow composition tools, it is increasingly
+important to have a common interface standard to allow the primitive blocks to
+connect to each other. The de-facto standard for this has become the AMBA AXI4
+interface, designed by ARM for their microcontrollers and processors. Roughly
+speaking, AXI4 specifies an interface for device-to-memory connections (AXI4
+and AXI4-lite), and a streaming interface (AXI4-stream) for device-to-device
+connections.
 
-Streaming record batches as AXI4 stream packets would be better in that the
-format is suitable for AXI4 streams and that it is unambiguous; however,
-kernels are likely to A) only use part of the columns in the table for their
-computation and B) operate in a row-oriented fashion. Some kernels,
-specifically those operating on graphs, may also need random access. A kernel
-might stream the record batch into a local memory, but this simply shifts the
-problem, and requires large (off-chip) memories.
+While AXI4 and AXI4-lite are of primary importance to processors due to their
+memory-oriented nature, AXI4-stream is much more important for FPGAs due to
+their spatial nature. However, because AXI4-stream is not originally designed
+for FPGAs, parts of the specifications are awkward for this purpose. For
+instance, AXI4-stream is byte oriented: it requires its data signal to be
+divided into one or more byte lanes, and specifies (optional) control signals
+that indicate the significance of each lane. Since FPGA designs are not at all
+restricted to operating on byte elements, this part of the specification is
+often ignored, and as such, any stream with a `valid`, `ready`, and one or more
+`data` signals of any width has become the de-facto streaming standard. This is
+reflected for instance by Chisel's built-in `Decoupled` interface type.
 
-A more suitable format would be to stream each individual in-memory Arrow
-buffer over a different stream. This allows only the relevant data to be
-streamed, allows row-wise access, and, with a suitable command stream from
-the kernel to the memory-to-stream (DMA) engine, random access is possible.
-Further problems arise, however. First of all, the kernel developer needs to
-have an in-depth understanding of the Arrow in-memory format to control the
-DMA engine and interpret the streams; kernel developers may instead be
-inclined to define their own in-memory format and shift data preparation to
-the software domain. Secondly, the byte-oriented format specified by AXI4
-streams is not a good fit for streaming the wide variety of data structures
-supported by Arrow. For instance, since AXI4 is byte-oriented, streaming
-booleans is impractical; one would either have to use only one of the eight
-bits of each byte lane (and need a custom DMA engine to do so), or forego
-the ability to define validity on per-boolean basis. On the other end of
-the spectrum, streaming 32-bit integers is inconvenient since, without
-imposing additional restrictions on the stream, the hardware would need to
-be capable of reconstructing the integers based on the byte strobe signals.
-AXI4 streams are also incapable of representing nested data structures; only
-one-dimensional packet boundaries can be given.
+Within a single design this is of course not an issue — as long as both the
+stream source and sink blocks agree on the same noncompliant interface, the
+design will work. However, bearing in mind that there is an increasing number
+of independently developed data flow oriented tools, each with their own
+standard library, interoperability becomes an issue: whenever a designer needs
+to use components from different vendors, they must first ensure that the
+interfaces match, and if not, insert the requisite glue logic in between.
 
-Summarizing the above:
+A similar issue exists in the software domain, where different programming
+languages use different runtime environments and calling conventions. For
+instance, efficiently connecting a component written in Java to a component
+written in Python requires considerable effort. The keyword here is
+"efficiently:" because Java and Python have very different ways of representing
+abstract data in memory, one fundamentally has to convert from one
+representation to another for any communication between the two components.
+This serialization and deserialization overhead can and often does cost more
+CPU time than the execution of the algorithms themselves.
 
- - A standardized streaming format for Arrow data is needed to expand the
-   Arrow project into the FPGA accelerator domain. A hardware IP library is
-   furthermore needed to convert between this streaming format and the Arrow
-   in-memory format.
- - While AXI4 streams are the de-facto standard for streaming interfaces,
-   its specification is on its own insufficient to accomplish this goal.
- - Using streams fully conforming to the AXI4 specification is impractical
-   for many of the complex data structures supported by Arrow.
+The Apache Arrow project attempts to solve this problem by standardizing a way
+to represent this abstract data in memory, and providing libraries for popular
+programming languages to interact with this data format. The goal is to make
+transferring data between two processes as efficient as sharing a pool of
+Arrow-formatted memory between them. Arrow also specifies efficient ways of
+serializing Arrow data structures for (temporary) storage in files or streaming
+structures over a network, and can also be used by GPUs through CUDA. However,
+FPGA-based acceleration is at the time of writing missing from the core
+project. The Fletcher project attempts to bridge this gap, by providing an
+interface layer between the Arrow in-memory format and FPGA accelerators,
+presenting the memory to the accelerator in an abstract, tabular form.
 
-This document aims to standardize such a streaming format. A preliminary
-version of the hardware IP library to convert between the suggested format and
-the Arrow in-memory format is available from the Fletcher project, maintained
-by TU Delft.
+In order to represent the complex, nested data types supported by Arrow, the
+Fletcher project had to devise its own data streaming format on top of the
+de-facto subset of AXI4-stream. Originally, this format was simply a means
+to an end, and therefore, not much thought was put into it. Particularly, as
+only Arrow-to-device interfaces (and back) were needed for the project, an
+interface designed specifically for device-to-device streaming is lacking; in
+fact, depending on configuration, the reader and writer interfaces do not even
+match completely. Clearly, a standard for streaming complex data types between
+components is needed, both within the context of the Fletcher project, and
+outside of it.
 
-Logical vs. physical streams
+As far as the writers are aware, no such standard exists as of yet. Defining
+such a standard in an open, royalty-free way is the primary purpose of this
+document.
+
+Goals
+-----
+
+ - Defining a streaming format for complex data types in the context of FPGAs
+   and, potentially, ASICs, where "complex data types" include:
+
+    * multi-dimensional sequences;
+    * unions (a.k.a. variants);
+    * structures such as tuples or records.
+
+ - Doing the above in as broad of a way as possible, without imposing
+   unnecessary burdens on the development of simpler components.
+
+ - Allowing for minimization of area and complexity through well-defined
+   contracts between source and sink on top of the signal specification itself.
+
+ - Extensibility. This specification should be as usable as possible, even to
+   those with use cases not foreseen by this specification.
+
+Non-goals
+---------
+
+ - In this specification, a "streaming format" refers to the way in which the
+   voltages on a bundle of wires are used to communicate data. We expressly do
+   NOT mean streaming over existing communication formats such as Ethernet, and
+   certainly not over abstract streams such as POSIX pipes or other
+   inter-process communication paradigms. If you're looking for the former,
+   have a look at Arrow Flight. The latter is part of Apache Arrow itself
+   through their IPC format specification.
+
+ - We do not intend to compete with the AXI4(-stream) specification.
+   AXI4-stream is designed for streaming unstructured byte-oriented data;
+   OpenTide streams are for streaming structured, complex data types.
+
+ - OpenTide streams have no notion of multi-endpoint network-on-chip-like
+   structures. Adding source and destination addressing or other routing
+   information can be done through the user signal.
+
+ - The primitive data type in OpenTide is a group of bits. We leave the mapping
+   from these bits to higher-order types such as numbers, characters, or
+   timestamps to existing specifications.
+
+Document structure
+------------------
+
+The remainder of this document consists of a definitions section for
+disambiguating the nomenclature used, followed by the specifications for the
+three layers of the complete OpenTide specification. These layers are the
+physical layer, the primitive layer, and the logical layer. The physical layer
+describes the signals that comprise a single stream on a similar level to the
+AXI4-stream specification. The primitive layer builds on this by specifying how
+primitive objects such as structures and sequences are to be transferred by one
+or more physical streams. The logical layer provides mappings for higher-level
+data types and transfer methods using the primitive objects defined by the
+primitive layer.
+
+Definitions
+-----------
+
+While the previous sections attempt to be as unambiguous as possible to
+developers with different backgrounds without needing constant cross-reference,
+the specification itself requires a more formal approach. This section defines
+the nomenclature used in the remainder of this document.
+
+ - *Signal* - a logical, unidirectional wire or bundle of wires in an FPGA
+   design, with a single driver and one or more receivers.
+
+    - *Scalar "* - a signal comprised of a single bit, equivalent to an
+      `std_logic` signal in VHDL.
+
+    - *Vector "* - a signal comprised of zero or more bits, equivalent to
+      an `std_logic_vector` in VHDL. Vector signals have a most significant and
+      least significant end, where the most significant end is written first
+      and has the highest indices. The least significant bit (if there is one)
+      always has index 0.
+
+ - *OpenTide stream* - a bundle of signals used to transfer logical data from
+   one source to one sink. OpenTide streams are specified by the OpenTide
+   physical layer.
+
+    - *" payload* - the collection of all signals that comprise the stream,
+      with the exception of the `valid` and `ready` handshake signals. Further
+      subdivided into the data, control, and user signals.
+
+    - *" data signal* - the subset of the stream payload used to transfer
+      the actual, logical data carried by the stream.
+
+    - *" data element* - the stream data signal is comprised of one or
+      more identical lanes, which can be used to transfer multiple data in a
+      single stream transfer. The AXI4-stream equivalent of this concept would
+      simply be a byte, as AXI4-stream is byte-oriented.
+
+    - *" data fields* - stream data elements are comprised of zero or more
+      data fields, concatenated least-significant-bit-first.
+
+    - *" control signals* - the subset of the stream *payload* used to
+      transfer metadata about the organization of the data within this
+      transfer.
+
+    - *" user signal* - the subset of the stream payload that is not
+      controlled by this specification, i.e. the `user` signal.
+
+    - *" user fields* - the `user` signal is comprised of zero or more user
+      fields, concatenated least-significant-bit-first.
+
+    - *" handshake* - the process through which the source and sink of a
+      stream agree that the stream payload signals are driven with valid data
+      by the source and the acknowledgement of this by the sink, done using the
+      `valid` and `ready` signals.
+
+    - *" transfer* - the completion of a single ready/valid handshake,
+      causing the stream payload to logically be transferred from source to
+      sink.
+
+    - *" packet* - a collection of transfers and elements delimited by a
+      nonzero `last` signal driven for the last transfer and a zero `last`
+      signal driven for all other transfers.
+
+    - *" batch* - a collection of transfers and elements delimited by a `last`
+      signal for which the most significant bit is driven to `'1'` for the last
+      transfer, but not for all other transfers. If the stream has zero `last`
+      signals ($D=0$), a batch is defined to equivalent to a single element.
+
+    - *" complexity* ($C$) - a number defining the set of guarantees
+      made by the stream source about the structure of the transfers within
+      a packet. The higher the number, the less guarantees are made, and the
+      simpler the stream. While $C$ is currently comprised of a single integer,
+      it may be extended to a period-separated list of integers in the future,
+      akin to version numbers.
+
+    - *" dimensionality* ($D$) - the dimensionality of the elements relative
+      to a batch. When nonzero, the elements are transferred in depth-first
+      order. `last` bit `i` is used to delimit the transfers along dimension
+      `i`.
+
+
+ - *Backpressure* - the means by which a stream sink may block the respective
+   source from sending additional transfers. This corresponds to asserting
+   `ready` low.
+
+ - *OpenTide River* - a bundle of OpenTide streams used to transfer primitive
+   or logical data from one source to one sink. Note that while all data
+   streams flow from the source to the sink, control streams may exist that
+   flow in the opposite direction.
+
+ - *Streamlet* - a component that operates on one or more OpenTide streams or
+   rivers.
+
+Physical layer specification
 ----------------------------
 
-Most of the more complex data types supported by Arrow do not have a fixed
-memory footprint per data element. The most common example of this is an array
-of strings. Arrow represents these data types as two separate columnar blocks
-of memory. In Arrow, these blocks are called buffers, while the logical dataset
-they together represent are called arrays. The streaming format requires a
-similar abstraction: the streaming representation of an array is called a
-logical stream, which is made up of one or more physical streams. Note,
-however, that a physical stream is not necessarily equivalent to a buffer; the
-streaming format attempts to minimize the number of independent streams as this
-complicates the control logic.
+### Parameterization
 
-For logical streams, we also make the distinction between (normal) linear
-streams and random-access streams. The latter includes a return channel that
-allows the sink to skip over elements or request elements again, while the
-former is a simpler and more conventional unidirectional data channel.
-Random-access streams bear some superficial resemblance to read-only
-memory-mapped AXI4, but they are fundamentally different: they represent a
-stream of an *array* of elements, where the sink can choose which elements it
-wants to access within the current array by means of their index. The primary
-use case for a random-access stream is to let a kernel access an Arrow array as
-it sees fit, while the host controls which arrays to access in sequence as part
-of independent kernel invocations.
+The signals that belong to an OpenTide stream are uniquely determined by the
+following parameters:
 
-Physical streams
-----------------
+ - $N$: the number of data elements in the data signal. Bounds:
+   $N \in \mathbb{N}, N \ge 1$.
 
-Physical Fletcher streams consist of a selection of the following signals, not
-including clock and reset. All signals are synchronous to a common clock
-domain.
+ - $M$: the bit-width of each data element; that is, the sum of the bit widths
+   of the data fields. Bounds: $M \in \mathbb{N}$.
 
-| Name    | Origin | Width | Default   | Purpose                                                       |
-|---------|--------|-------|-----------|---------------------------------------------------------------|
-| `valid` | Source | 1     | `'1'`     | Stalling the data stream due to the source not being ready.   |
-| `ready` | Sink   | 1     | `'1'`     | Stalling the data stream due to the sink not being ready.     |
-| `data`  | Source | N x M | n/a       | Data transfer of N M-bit elements.                            |
-| `strb`  | Source | N     | all `'1'` | Encodes which lanes are valid.                                |
-| `stai`  | Source | C     | 0         | Encodes the index of the first valid element in data.         |
-| `endi`  | Source | C     | N-1       | Encodes the index of the last valid element in data.          |
-| `empty` | Source | 1     | `'0'`     | Encoding zero-length packets.                                 |
-| `last`  | Source | D     | all `'1'` | Indicating the last transfer for D levels of nested packets.  |
-| `ctrl`  | Source | U     | n/a       | Additional control information carried along with the stream. |
+ - $D$: the dimensionality of the elements relative to a batch. Bounds:
+   $D \in \mathbb{N}$.
 
-These signals are described in detail in the following sections.
+ - $U$: the number of bits in the `user` signal. Bounds: $U \in \mathbb{N}$.
 
-In the table, the following parameters are used:
+ - $C$: the complexity of the stream, described in the stream complexity
+   section below.
 
- - N is the maximum number of elements that can be transferred in a single
-   cycle.
- - M is the bit-width of each element.
- - D is the dimensionality of the datatype represented by the stream, or
-   alternatively, the packet nesting level.
- - C is the width of the `stai` and `endi` signals, which must always be equal
-   to ceil(log2(N)).
- - U is the width of the `ctrl` signal, of which the significance is not
-   defined by (this layer of) the specification.
+### Signal interface requirements
 
-These parameters are defined by the requirements of the source and sink that
-the stream is connected to. The values for N, M, D, (and indirectly, C,) must
-be equal for the source and sink. U can be different, in which case the stream
-uses the maximum width of the values required by the source and sink, and the
-signal is resized on either side as if it were an unsigned number.
+The physical layer defines the following signals.
 
-In addition to these parameters, there is an additional "hidden" parameter
-called the normalization level (L). The higher this level, the more restricted
-the transfers on the stream are: the source has to conform to additional rules,
-while the sink can assume that these rules are adhered to. The levels are:
+| Name    | Origin | Width                     | Default   | Complexity condition |
+|---------|--------|---------------------------|-----------|----------------------|
+| `valid` | Source | *scalar*                  | `'1'`     |                      |
+| `ready` | Sink   | *scalar*                  | `'1'`     |                      |
+| `data`  | Source | $N \times M$              | all `'0'` |                      |
+| `last`  | Source | D                         | all `'1'` |                      |
+| `empty` | Source | *scalar*                  | `'0'`     | $C \ge 4$            |
+| `stai`  | Source | $\lceil \log_2{N} \rceil$ | 0         | $C \ge 7$            |
+| `endi`  | Source | $\lceil \log_2{N} \rceil$ | $N-1$     |                      |
+| `strb`  | Source | $N$                       | all `'1'` | $C \ge 8$            |
+| `user`  | Source | U                         | all `'0'` |                      |
 
- - Level 0: no additional rules imposed.
- - Level 1: the `strobe` bits are always one.
- - Level 2: `stai` is always zero. That is, if a transfer contains data, the
-   first element is always in the first lane.
- - Level 3: the rules of level 2, and `endi` is always N-1 if `last` is 0. That
-   is, the element with index i is always in lane i mod N.
- - Level 4: the rules of level 3, and `empty` is always `'0'` if `last` is 0.
-   That is, the `last` marker cannot be postponed to an independent transfer,
-   even if the total number of elements transfered is divisible by N.
- - Level 5: the rules of level 4, but `empty` is always `'0'` regardless of
-   `last`. That is, empty sequences are not supported.
- - Level 6: the rules of level 5, and `valid` is must remain `'1'` until `last`
-   a transfer with nonzero `last` is handshaked. That is, the stream is never
-   interrupted (unless backpressured through `ready`) during a packet.
+Streamlets must comply with the following rules for each stream interface.
 
-The normalization level provided by a source must be greater than or equal to
-the level expected by a sink, or behavior is undefined.
+ - The full name of each signal consists of an optional underscore-terminated
+   stream name followed by the name specified above. In case sensitive
+   languages, maintaining lowercase is preferable.
 
-It is possible to construct generic components that vary N and increase L from
-any level to level 3, allowing an otherwise incompatible source/sink pair to be
-connected.
+ - If a streamlet does not allow a stream parameter to be varied by means of a
+   generic, the vector widths can be hardcoded.
 
-### `valid` and `ready`
+ - Signal vectors that are zero-width for the full parameter set supported by
+   the streamlet can be omitted. For instance, if a streamlet only supports
+   $N=1$, `stai` and `stoi` can be omitted.
+
+ - To allow lower-complexity streams to be connected to higher-complexity
+   sinks, all input signals on the interface of the sink must have the default
+   values from the table specified in the interface.
+
+ - The signals should be specified in the same order as the table for
+   consistency.
+
+### Clock and reset
+
+ - All signals are synchronous to the rising edge of a single clock signal,
+   shared between the source and sink.
+
+ - The source and sink of a stream can either share or use different reset
+   sources. The requirements on the `valid` and `ready` signals ensure that no
+   transfers occur when either the source or the sink is held under reset.
+
+### Complexity
+
+The complexity parameter describes a contractual agreement between the source
+and the sink to transfer chunks in a certain way. A higher complexity implies
+that the source provides fewer guarantees, and thus that the control logic and
+datapath of the sink can make fewer assumptions. Any source with complexity $C$
+can be connected to any sink with complexity $C' \ge C$ without glue logic or
+loss of functionality; equivalently, increasing the complexity parameter of a
+stream is said to be zero-cost (known as the compatibility requirement).
+
+Although only a single natural number suffices for the current OpenTide
+specification version, it may in the future consist of multiple
+period-separated integers (similar to a version number). The $\ge$ comparison
+used in the compatibility requirement is then defined to operate on the
+leftmost integer first; if this number is equal, the next integer is compared,
+and so on. In the event that one complexity number consists of more integers
+than the other, the numbers can be padded with zeros on the right-hand side to
+match.
+
+For this version of the specification, the natural numbers 1 through 8 are used
+for the complexity number. The following rules are defined based on this
+number.
+
+ - $C \lt 8$: the `strb` signal is always all ones and is therefore omitted.
+
+ - $C \lt 7$: the `stai` signal is always zero and is therefore omitted.
+
+ - $C \lt 6$: the `endi` signal is always $N-1$ if `last` is zero. This
+   guarantees that the element with index $i$ within the surrounding packet is
+   always transferred using data signal lane $i \mod N$.
+
+ - $C \lt 5$: the `empty` signal is always `'0'` if `last` is all `'0'`, and
+   `last` bit $i$ being driven `'1'` implies that `last` bit $i-1$ must also
+   be `'1'`. This implies that `last` markers cannot be postponed, even if the
+   total number of elements transfered is divisible by $N$.
+
+ - $C \lt 4$: the `empty` signal is always zero is and is therefore omitted.
+   This implies that empty packets are not supported.
+
+ - $C \lt 3$: once driven `'1'`, the `valid` signal must remain `'1'` until a
+   packet-terminating transfer (LSB of the `last` signal is set) is handshaked.
+
+ - $C \lt 2$: once driven `'1'`, the `valid` signal must remain `'1'` until a
+   batch-terminating transfer (MSB of the `last` signal is set) is handshaked.
+
+### Detailed signal description
+
+#### `valid` and `ready`
 
 The `valid` and `ready` signals fulfill the same function as the AXI4-steam
 `TVALID` and `TREADY` signals.
 
- - The source asserts `valid` high synchronous to the rising edge of the clock
-   signal common to source and sink in the same cycle in which it presents
-   valid data on the remaining signals.
- - Source-generated signals other than `valid` are don't-care while `valid` is
-   low.
- - The sink asserts `ready` high when it is ready to consume the current stream
+ - The source asserts `valid` to `'1'` in the same or a later cycle in which it
+   starts driving a valid payload.
+
+ - The state of the payload signals is undefined when `valid` is `'0'`. It is
+   recommended for simulation models of streamlets to explicitly set the
+   payload signals to `'U'` when this is the case.
+
+ - The sink asserts `ready` to `'1'` when it is ready to consume a stream
    transfer.
- - The source must keep all source-generated signals (including valid) stable
-   after asserting `valid`, until the first rising edge of the clock during
-   which `ready` is asserted.
+
+ - The source must keep `valid` asserted `'1'` and the payload signals stable
+   until the first cycle during which `ready` is also asserted `'1'` by the
+   sink.
+
  - A transfer is considered handshaked when both `valid` and `ready` are
-   asserted high at the rising edge of the common clock signal.
- - `ready` is don't-care when `valid` is low. Sources must therefore not wait
-   for `ready` to be asserted before asserting `valid`. Conversely, sinks may
-   wait for `valid` to be asserted before (possibly combinatorially) asserting
-   `ready`.
- - It is recommended for `valid` to be low while the source is being reset, and
-   for `ready` to be low while the sink is being reset. This allows source and
-   sink to have independent reset sources without loss of data.
+   asserted `'1'` during a clock cycle.
+
+ - The state of the `ready` signal is undefined when `valid` is `'0'`. Sources
+   must therefore not wait for `ready` to be asserted `'1'` before asserting
+   `valid` to `'1'`. However, sinks *may* wait for `valid` to be `'1'`
+   before asserting `ready` to `'1'`; this is up to the implementation.
+
+ - `valid` must be `'0'` while the source is under reset. This prevents
+   spurious transfers when the reset of the sink is released before the reset
+   of the source.
+
+ - `ready` must be `'0'` while the sink is under reset. This prevents transfers
+   from being lost when the reset of the source is released before the reset of
+   the sink.
 
 Example timing:
 
 ```
-           __    __    __    __    __    __    __
- clock |__/  \__/  \__/  \__/  \__/  \__/  \__/  \_
-       |          ___________       ___________
- valid |_________/          :\_____/    :     :\____
-       |                ____________________________
- ready |_______________/    :           :     :
-       |          ___________       _____ _____
-others |=========<___________>=====<_____X_____>====
-                            :           :     :
-                            ^           ^     ^
-                        stream transfers occur here
+            __    __    __    __    __    __    __
+ clock  |__/  \__/  \__/  \__/  \__/  \__/  \__/  \_
+        |          ___________       ___________
+ valid  |_________/          :\_____/    :     :\____
+        |                _____       ___________
+ ready  |=========._____/    :`====='    :     :`====
+        |          ___________       _____ _____
+payload |=========<___________>=====<_____X_____>====
+                             :           :     :
+                             ^           ^     ^
+                         stream transfers occur here
 ```
 
-### `data`
+#### `data`
 
-The `data` signal carries all the data transferred by the stream. Two formats
-are specified:
+The `data` signal carries all the data transferred by the stream. It consists
+of a flattened array of size $N$ consisting of elements of bit-width $M$.
+Within this context, the element subsets of the data vector are also known as
+lanes. Each element/lane can be further subdivided into zero or more named
+fields.
 
- - A bit vector N x M in width (`N*M-1 downto 0`), where N is the maximum
-   number of elements that can be transferred in a single cycle, and M is the
-   bit-width of each element. Elements are ordered LSB-first.
+To ensure compatibility across RTL languages and vendors, the `data` signal is
+represented on the streamlet interfaces as a simple vector signal of size
+$N \times M$ despite the above. The fields and elements are flattened
+element-index-major, LSB-first. Formally, the least significant bit of the
+field with index $f$ for lane $l$ is at the following bit position in the
+`data` vector:
 
- - An array of N records (`0 to N-1`), each record/struct containing entries
-   descriptive for the transferred element, given that the record can be
-   serialized to M bits. The serialization of these records is described in the
-   data type serialization section.
+$l \times M + \sum_{i=0}^{f-1} |F_i|$
 
-Note that these two formats are merely syntactic sugar for the same bundle of
-wires, so conversion between the two does not result in additional hardware.
-It is recommended to use the bit-vector format on the periphery of IP cores.
-The array-of-records format can be used internally to improve code readability,
-given appropriate tooling support.
+where $|F_i|$ denotes the bit-width of field $i$.
 
-For either format, the following specifications apply.
+Outside of the interfaces of streamlets intended to be connected to streamlets
+outside of the designer's control, designers may wish to represent the `data`
+signal using an array of records, or a different array indexed by  the lane
+index for each field. In the latter case, the signal names should be of the
+form `<stream-name>_data_<field-name>` for consistency, and to prevent name
+conflicts in future version of this specification.
 
- - The `data` signal is don't-care while `valid` is not asserted or `empty` is
-   asserted.
- - While `valid` is asserted and `empty` is not asserted, only elements with
-   index `stai` to `endi` (inclusive) carry significance. The remainder of the
-   elements are don't-care.
+The following rules apply the `data` signal(s).
 
-### `empty`
+ - Element lane $i$ of the `data` signal is don't-care in any of the following
+   cases:
+
+    - `valid` is `'0'`;
+    - `empty` is `'1'`;
+    - $i$ > `endi`;
+    - $i$ < `stai`; or
+    - bit $i$ of `strb` is `'0'`.
+
+ - Element lane $i$ carries significant data during a transfer if and only if:
+
+    - `empty` is `'0'`;
+    - $i$ <= `endi`;
+    - $i$ >= `stai`; and
+    - bit $i$ of `strb` is `'1'`.
+
+#### `last`
+
+The `last` signal is a $D$-bit vector, wherein bit $i$ being driven `'1'` marks
+that the associated transfer terminates enumeration of elements across
+dimension $i$ in the current batch. Intuitively, a stream with $D=2$ and $N=1$
+can transfer the batch represented by `[[1, 2], [3, 4, 5]]` with the following
+transfers:
+
+| `data` | `last` |
+|--------|--------|
+| 1      | `"00"` |
+| 2      | `"01"` |
+| 3      | `"00"` |
+| 4      | `"00"` |
+| 5      | `"11"` |
+
+The following rules apply.
+
+ - The `last` signal is don't-care while `valid` is `'0'`.
+
+ - The LSB of the `last` vector is used to terminate packets. When `D=0`,
+   packets reduce to single elements.
+
+ - The MSB of the `last` vector is used to terminate batches. When `D=0`,
+   batches reduce to single elements.
+
+ - While not named, any intermediate `last` bits terminate the intermediate
+   dimensions of a batch.
+
+ - It is illegal to terminate dimension `i` without also terminating dimension
+   `i=1`. Intuitively, violating this would encode an inner list that extends
+   beyond the list it is an element of. Therefore, in transfers where `empty`
+   is not asserted, the `last` vector must be a thermometer code. For example,
+   for `D=3`, only the following values are valid: `"000"`, `"001"`, `"011"`,
+   and `"111"`.
+
+ - The `empty` flag can be used to delay termination of a dimension. In this
+   case, the `last` value need not always be thermometer code. For instance,
+   a transfer with `last` = `"001"` followed by a transfer with `last` =
+   `"110"` and empty driven `'1'` is a legal way to terminate batch. However,
+   each dimension must only be terminated once, and must be terminated in inner
+   to outer order. For instance, `last` = `"010"` followed by `last` = `"101"`
+   is illegal because the order is violated. `last` = `"001"` with `empty` =
+   `'0'` followed by `last` = `"111"` with `empty` = `'1'` is legal, but
+   encodes an empty packet before the batch is closed.
+
+#### `empty`
 
 The `empty` signal is used to encode empty packets, and to delay transfer of
-packet boundary information when such information is not known during the last
-transfer containing actual data.
+dimension boundary information when such information is not known during the
+last transfer containing actual data.
 
- - The `empty` signal is don't-care while `valid` is not asserted.
- - When `empty` is asserted, only control information is transferred. The
-   `data`, `stai`, and `endi` signals are therefore don't-care.
+ - The `empty` signal is don't-care while `valid` is `'0'`.
 
-### `stai` and `endi`
+ - When `empty` is asserted, only control and user-specified information is
+   transferred. The `data`, `stai`, `endi`, and `strb` signals are therefore
+   don't-care.
 
-For streams that can carry more than one element per cycle (N > 1), the
+#### `stai` and `endi`
+
+For streams that can carry more than one element per cycle ($N > 1$), the
 `stai` (start index) and `endi` (end index) signals encode how many and which
-of the element lanes are significant. They are C-bit vectors (`C-1 downto 0`),
-where C is equal to ceil(log2(N)).
+of the data element lanes contain valid data. They are vectors of length
+$\lceil \log_2{N} \rceil$, interpreted as unsigned integers. The following
+rules apply.
 
- - The `stai` and `endi` signal is don't-care while `valid` is not asserted or
-   while `empty` is asserted.
+ - The `stai` and `endi` signals are don't-care while `valid` is `'0'` or
+   while `empty` is `'1'`.
+
  - `stai` must always be less than or equal to `endi`.
 
-### `last`
+ - `endi` must always be less than `N`.
 
-The `last` signal marks a transfer as being the last for a certain (nested)
-packet level. It is an D-bit vector (`D-1 downto 0`). Intuitively, the
-structure serialized by a Fletcher stream can be seen as D levels of nested
-lists.
+#### `strb`
 
- - The `last` signal is don't-care while `valid` is not asserted.
- - The LSB is used to terminate the innermost subpackets. The MSB is used to
-   terminate the outermost packet.
- - It is illegal to terminate a packet without also terminating all contained
-   subpackets (intuitively, violating this would encode an inner list that
-   somehow extends beyond the list it is an element of, which is nonsensical).
-   Therefore, in transfers where `empty` is not asserted, the `last` vector
-   must be a thermometer code. For example, for `D=3`, only the following
-   values are valid: `"000"`, `"001"`, `"011"`, and `"111"`.
- - The `empty` flag can be used to delay packet termination. In this case, the
-   `last` value need not always be thermometer code. For instance, `"001"`
-   without empty followed by `"110"` with empty is a legal way to terminate the
-   outermost packet. However, each packet nesting level must only be terminated
-   once, and they must be terminated in inner to outer order. For instance,
-   `"010"` empty followed by `"101"` with empty is illegal because the order is
-   violated. `"001"` without empty followed by `"111"` with empty is legal, but
-   encodes an empty innermost packet before the outermost packet is closed.
+For streams that can carry more than one element per cycle ($N > 1$), the
+`strb` signal can be used to enable or disable specific element data lanes.
+It is a vector of size $N$. A `strb` signal being `'0'` implies that the
+respective lane does *not* carry significant data. Otherwise, its significance
+is determined by the `stai`, `endi`, and `empty` signals.
 
-### `ctrl`
+It is obvious that the `strb` signal can be used to describe everything that
+`stai`, `endi`, and `empty` can together describe and more, so they may appear
+redundant. Refer to the "`strb` vs. `stai`/`endi`" section for the reasoning
+behind including all four of these signals in the specification.
 
-The `ctrl` signal can be used to carry additional non-element data along with
-the stream. It therefore acts somewhat like data, but is not affected by
-`stai`, `endi`, or `empty`. It is a U-bit vector (`U-1 downto 0`). The
-significance of the signal is not specified by this layer of the specification.
+The `strb` signal is don't-care while `valid` is `'0'` or while `empty` is
+`'1'`.
 
-Typically, the `ctrl` signal actually consists of multiple logical signals.
-Implementations are free to represent these logical signals however they want,
-as long as they are serialized to the canonical `ctrl` bit vector when the
-stream is passed through IP cores that are not or need not be aware of their
-significance.
+#### `user`
 
- - The `ctrl` signal is don't-care while `valid` is not asserted.
+The `user` signal carries user-defined control information; that is,
+information associated with a transfer rather than a data element. It can be
+subdivided into zero or more user fields. The stream parameter $U$ must be set
+to the total bit-width of these user fields.
+
+To ensure compatibility across RTL languages and vendors, the `user` signal is
+represented on the streamlet interfaces as a simple vector signal of size
+$U$ despite the above. The user fields are concatenated LSB-first.
+
+Outside of the interfaces of streamlets intended to be connected to streamlets
+outside of the designer's control, designers may wish to represent the `user`
+signal using a record or an individual signal for each field. In the latter
+case, the signal names should be of the form `<stream-name>_user_<field-name>`
+for consistency, and to prevent name conflicts in future version of this
+specification.
+
+The following rules apply the `user` signal(s).
+
+ - The `user` signal is don't-care while `valid` is `'0'`.
+
+ - Streamlets that transform a stream purely element-wise or merely buffer a
+   stream should allow for a generic-configurable `user` signal, even if they
+   do not themselves use the `user` signal.
+
+ - Streamlets that do manipulate transfers should simply not support the `user`
+   signals beyond those they specify themselves.
+
+### `strb` vs. `stai`/`endi`
+
+At first glance, the `strb` signal appears to make `stai`, `endi`, and `empty`
+redundant, as the `strb` signal on its own can describe any lane utilization
+that can be described through those signals and more. The fact that AXI4-stream
+uses `TSTRB` (and `TKEEP`) for this purpose lends further credence to this
+thought. We nevertheless specify `stai`, `endi`, and `empty` for the following
+reasons.
+
+ - Many data sources by design output on consecutive lanes, and thus have no
+   need for a full `strb` signal. This is typically the case, for instance,
+   for a streamlet that reads from a consecutive memory region using a wide
+   memory interface bus.
+
+ - Simple streamlets that manipulate a stream usually operate on a lane-by-lane
+   basis, and therefore do not affect the lane layout they receive on their
+   input. Streamlets that maintain state may also need an enable bit per lane.
+   Having more than just the `strb` bit to interpret is a downside here;
+   however, generating these lane enable signals is an efficient operation on
+   6-LUT FPGAs up to $N=64$, requiring only two levels of logic with three LUTs
+   per lane.
+
+ - Many data sinks, for instance those that write back to memory, can benefit
+   from the guarantee that only consecutive lanes are used. This reduces the
+   complexity of the control logic in particular. Most importantly, without
+   `strb`, this number of input bits to the control logic has complexity
+   $\mathcal{O}(\log N)$ versus $\mathcal{O}(N)$ and is therefore much more
+   likely to be efficiently synthesizable with few levels of logic, reducing
+   area and increasing frequency or decreasing the necessary pipeline depth.
+
+ - Avoiding the `strb` signals reduces interconnect and therefore congestion
+   for wide streams by a small amount.
+
+In summary, a full `strb` signal is often not needed, while it increases
+hardware complexity even for simple streamlets operating on wide streams. Since
+wide streams are fundamental to achieving performance competitive to CPU/GPU on
+an FPGA, and primitive operations often are simple, optimizing for these cases
+is important. Therefore, the `strb` signal is used only for streams with
+$C \ge 8$, the highest complexity level currently defined.
+
+Sources that need the `strb` signal will usually drive `stai`, `endi`, and
+`empty` with their default values, giving full control to the `strb` signal.
+The only exception is for signalling empty packets and postponing `last`
+markers — this *must* be done by asserting `empty`. However, the `stai` and
+`endi` signals must still be present for sinks with $C \ge 8$ such that they
+can also support sources with $C < 8$.
+
+It is worth noting that in this case the `stai` and `endi` signals will most
+likely be removed by the synthesizer during constant propagation, at least
+until the first FIFO is encountered; tools may not be capable of propagating
+across a FIFO due to the memory that sits in between. Regardlessly, the small
+fraction of systems that require `strb` will likely be of such complexity that
+any overhead induced by `stai` and `endi` is negligible.
+
+
+
+
+# TODO from here onwards
+
+
 
 Logical streams
 ---------------
