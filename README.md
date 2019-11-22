@@ -249,7 +249,6 @@ the nomenclature used in the remainder of this document.
       order. `last` bit `i` is used to delimit the transfers along dimension
       `i`.
 
-
  - *Backpressure* - the means by which a stream sink may block the respective
    source from sending additional transfers. This corresponds to asserting
    `ready` low.
@@ -264,6 +263,10 @@ the nomenclature used in the remainder of this document.
 
 Physical layer specification
 ----------------------------
+
+The physical layer describes the timing and representation of arbitrary data
+transferred from a data source to a data sink through a group of signals known
+as a stream.
 
 ### Parameterization
 
@@ -283,6 +286,10 @@ following parameters:
 
  - $C$: the complexity of the stream, described in the stream complexity
    section below.
+
+$M$ and $D$ together represent the type of data transferred by the stream,
+whereas $N$, $U$, and $C$ represent the way in which this data type is
+transferred.
 
 ### Signal interface requirements
 
@@ -352,26 +359,26 @@ For this version of the specification, the natural numbers 1 through 8 are used
 for the complexity number. The following rules are defined based on this
 number.
 
- - $C \lt 8$: the `strb` signal is always all ones and is therefore omitted.
+ - $C < 8$: the `strb` signal is always all ones and is therefore omitted.
 
- - $C \lt 7$: the `stai` signal is always zero and is therefore omitted.
+ - $C < 7$: the `stai` signal is always zero and is therefore omitted.
 
- - $C \lt 6$: the `endi` signal is always $N-1$ if `last` is zero. This
+ - $C < 6$: the `endi` signal is always $N-1$ if `last` is zero. This
    guarantees that the element with index $i$ within the surrounding packet is
    always transferred using data signal lane $i \mod N$.
 
- - $C \lt 5$: the `empty` signal is always `'0'` if `last` is all `'0'`, and
+ - $C < 5$: the `empty` signal is always `'0'` if `last` is all `'0'`, and
    `last` bit $i$ being driven `'1'` implies that `last` bit $i-1$ must also
    be `'1'`. This implies that `last` markers cannot be postponed, even if the
    total number of elements transfered is divisible by $N$.
 
- - $C \lt 4$: the `empty` signal is always zero is and is therefore omitted.
+ - $C < 4$: the `empty` signal is always zero is and is therefore omitted.
    This implies that empty packets are not supported.
 
- - $C \lt 3$: once driven `'1'`, the `valid` signal must remain `'1'` until a
+ - $C < 3$: once driven `'1'`, the `valid` signal must remain `'1'` until a
    packet-terminating transfer (LSB of the `last` signal is set) is handshaked.
 
- - $C \lt 2$: once driven `'1'`, the `valid` signal must remain `'1'` until a
+ - $C < 2$: once driven `'1'`, the `valid` signal must remain `'1'` until a
    batch-terminating transfer (MSB of the `last` signal is set) is handshaked.
 
 ### Detailed signal description
@@ -643,445 +650,271 @@ across a FIFO due to the memory that sits in between. Regardlessly, the small
 fraction of systems that require `strb` will likely be of such complexity that
 any overhead induced by `stai` and `endi` is negligible.
 
+### Arrays of streams
+
+Streamlets that take an indexable array of streams as input or output can do
+so by individually concatenating the stream signals into vectors, ordered
+LSB-first. For instance, an array of three streams will have a `valid` signal
+vector of width three, and so on.
+
+Primitive layer specification
+-----------------------------
+
+This layer specifies how a group of OpenTide streams, known as a river, can be
+used to transfer complex nested types. The "primitive" in the name refers to
+the fact that such nested types are typically primitives in higher-order
+data-oriented languages.
+
+Looking back to the parameters of OpenTide streams, this layer only specifies
+the values for parameters $M$ and $D$. $M$ is described by way of a list of
+fields, each with their own bit width. The remaining parameters are independent
+of the data transferred over the streams, and must be specified independently
+by the designer, based on the performance/area/complexity considerations of
+their design.
+
+### Type representation
+
+We first specify a generic type system that describes exactly the set of
+primitive types supported by rivers.
+
+#### Intuitive description
+
+A river allows transferrence of data of types recursively defined using the
+following primitives:
+
+ - a value of a certain bit-width;
+ - sequences of some subtype with variable length (representing lists, arrays,
+   and so on);
+ - structures of a number of subtypes with optionally named fields (also known
+   as (named) tuples and records in some languages); and
+ - unions of a number of subtypes with optionally named fields (also known as
+   variants in some languages).
+
+Some flexibility is provided in how these types can be represented. This is
+intended to give the hardware designer the freedom to determine which
+representation is the most suitable for their streamlet or application. The
+logical specification, if used, intends to impose more strict requirements on
+these representations to increase the odds of two independently developed
+streamlets sharing the same interface where applicable.
+
+To handle sequences in particular, we define the notion of domains. A domain
+is essentially defined to be a group of one or more physical streams that are
+guaranteed to carry the same "shape" of data at runtime in terms of nested
+sequences. For instance, if a stream were to convey the nested structure
+$[[1, 2], [3, 4, 5]]$, all streams in the same domain are guaranteed to carry
+data of the form $[[a, b], [c, d, e]]$, while streams in a different domain may
+for instance carry data of the form $[[f, g, h, i], [j]]$; the $D$ parameter
+for these streams is the same, but their data flows cannot logically be merged.
+
+Domains form a tree-like structure, where each added dimension adds a branch.
+For instance, both the previously mentioned domains may have the same parent
+domain, wherein the streams transfer data of the form $[k, l]$. Using the type
+notation we will define more formally later, this structure would result from
+for instance `[([T], [U])]`.
+
+We also define a special kind of domain, called a flattening domain. Such a
+domain bears no significance in the logical sense; it has the same logical
+dimensionality as its parent domain, and the data carried by it also has the
+same shape. However, the $D$ parameter of the physical streams belonging to
+this domain is reset to 0; they essentially carry flattened data. The shape of
+the data can only be recovered by copying the shape over from a stream in the
+parent domain, or by reconstructing it through some other means.
+
+Flattening domains may seem like an odd concept at first glance, but turn out
+to be useful in practice, for instance to describe a river consisting of a
+length stream and a flattened data stream (this is called a `Vec` in the
+logical layer). Such structures are particularly important in the context of
+wide streams (large $N$) carrying many short sequences; without flattening,
+each transfer can fundamentally carry at most one sequence, while the flattened
+`Vec` representation does not have this limitation. Without flattening domains,
+the only way to represent such a river would be to support multiple root
+domains, in which case the shape information would be lost entirely.
+
+#### Formal description
+
+We define river $R$ as an ordered tree of so-called domains. Each domain $X$
+is a triple of an identifier, a tuple containing zero or more streams, and a
+flattening flag:
+
+$X = ( I_X, ( S_0, S_1, \cdots , S_{n-1} ), f )$
+
+Each stream is furthermore described by an identifier, a set of data fields,
+and a reverse-direction flag:
+
+$S = ( I_S, ( F_0, F_1, \cdots , F_{n-1} ) , r )$
 
+Finally, each field is described by an identifier and a bit-width:
 
+$F = ( I_F, n )$
 
-# TODO from here onwards
+A river maps to one or more physical OpenTide streams by means of preorder
+depth-first traversal of the domains, concatenating the streams encountered.
+The $M$ parameter of each stream is defined by the sum of the bit-widths of
+its fields. The $D$ parameter is determined by counting the number of domains
+that need to be traversed to get to either the root domain or a domain with
+the flattening flag set, such that a stream belonging to the root domain or
+a domain with the flattening flag set has $D = 0$. The remaining parameters do
+not relate to the type carried by the stream, and can thus be freely chosen by
+the designer.
 
-
-
-Logical streams
----------------
-
-A single physical Fletcher stream can only transfer elements with a fixed size
-known at design time, or uniformly nested lists thereof. In order to transfer
-more complex data types, multiple physical streams have to work together, and
-additional specification is needed to specify which physical data bit does
-what.
-
-Before attempting to specify this, let us first formally describe the set of
-supported data types by means of a recursive grammar, defined as follows:
-
-    # Top-level rule
-    type = bits | list | vector | struct | union ;
-
-    # Comma-separated list of types
-    types = type
-          | type , "," , types ;
-
-    # Primitive type: a positive number of bits with undefined representation
-    bits = "b" , positive number ;
-
-    # Sequences types, mapping to Arrow arrays and nested lists
-    list = "[" , type , "]" ;
-    vector = "<" , type , ">" ;
-
-    # Concatenations of a number of elements with different types
-    struct = "(" , types , ")" ;
-
-    # Alternations of two or more different types, possibly including null
-    union = "{" , type , "," , types , "}"
-          | "{" , "NULL" , "," , types , "}" ;
-
-Each of these grammar construction rules is accompanied by a rule for
-constructing the set of physical streams needed to represent the logical
-stream for that type. To define these, we also need to formaly define what
-constitutes a logical stream. We define this as S physical streams with
-parameters M_i and D_i for physical stream i ∈ 0..S-1, where S ≥ 1. The first
-physical stream (i = 0) is referred to as the primary stream, while the zero
-or more other streams are referred to as the secondary streams. Within the
-physical streams, the physical data element is subdivided into one or more
-fields, ordered LSB-first.
-
-### Bits
-
-The `bits` type used to represent a primitive datum with a fixed number of
-bits B (denoted `b<B>` in the grammar, where `<B>` is the positive integer
-representing the number of bits). Common examples of this are signed and
-unsigned two's complement numbers, floating point numbers, and characters.
-The logical stream for the `bits` type has the following parameters:
-
-    S = 1
-    M_0 = B
-    D_0 = 0
-
-### Lists and vectors
-
-A `list` with element type `T` (denoted `[T]` in the grammar) represents a
-sequence of elements of type `T` of which the length is not known at
-design-time. It is important to realize at this point that for instance `[b8]`
-represents a stream of byte sequences, not just a stream of bytes — a stream
-of bytes has the type `b8`. For lists, these sequences are delimited by means
-of adding a `last` signal to each of the physical streams that represents `T`,
-thus:
-
-    S = S^T
-    M_i = S^T_i         | i ∈ 0..S-1
-    D_i = D^T_i + 1     | i ∈ 0..S-1
-
-A `vector` with element type `T` (denoted `<T>` in the grammar) also represents
-a sequence of elements of type `T` of which the length is not known at
-design-time, but the sequence boundaries are communicated by means of a (32-bit)
-length stream, flowing independently to the data stream. Thus:
-
-    S = S^T + 1
-    M_0 = 32
-    D_0 = D^T_0
-    M_i+1 = S^T_i       | i ∈ 0..S-1
-    D_i+1 = D^T_i       | i ∈ 0..S-1
-
-Sinks of vector streams may assume that the length of the vector is
-communicated to them before they have to start accepting the vector data.
-This allows the sink to for instance allocate space for the sequence before
-it processes it further. This means that components that produce vectors must
-ensure that this length is indeed made available before they wait for the sink
-to accept any element, or a deadlock can occur.
-
-Vectors are typically more complicated to implement properly, but can be more
-performant than lists. Specifically, a stream of type `[T]` can only transfer
-one `T` per cycle, regardless of its `N` parameter and the size of the list,
-due to the sequence boundary being encoded with the `last` control signal.
-Streams of vectors do not have this limitation; they can transfer `N_0`
-sequences per cycle, as long as the throughput is not limited by the widths of
-the secondary streams.
-
-A stream of vectors can be transformed into a stream of lists very simply, by
-counting the number of elements on the incoming secondary stream and indicating
-`last` when the element count hits the incoming length. The opposite is much
-more difficult however, as determining the sequence length requires consumption
-(and thus buffering) of the incoming data stream. Also, vectors are limited to
-2^32-1 elements, while list length is unbounded.
-
-### Structs
-
-A `struct` with element types `T`, `U`, ... (denoted `(T,U,...)`) represents a
-data type built up out of the concatenation of its element types (similar to a
-`struct` in C). The logical stream for such a `struct` is constructed with the
-following algorithm:
-
-    # An empty struct (if it would be legal) consists of a single primary
-    # stream with a zero-sized data element.
-    S = 1
-    M_0 = 0
-    D_0 = 0
-
-    for each element type T:
-        if D^T_0 = 0:
-            # Concatenate the data elements of the primary streams together,
-            # to reduce the number of physical streams for the struct as much
-            # as possible.
-            M_0 += M^T_0
-
-        else:
-            # When the struct element type is a list, we can't join the data
-            # with the other struct elements, so the list element stream
-            # becomes a secondary stream.
-            M_S = M^T_0
-            D_S = D^T_0
-            S += 1
+#### Grammatical description
 
-        # Append any secondary streams of the struct element to our list of
-        # secondary streams.
-        for i in 1 to S^T - 1:
-            M_S = M^T_i
-            D_S = D^T_i
-            S += 1
+We define two sets of equivalent grammars to recursively describe or construct
+a river, one intended to be human readable/writable, and one that uses only
+case-insensitive alphanumerical characters and underscores such that it can be
+embedded into an identifier. The latter serves a similar purpose as name
+mangling does in C++: to allow generative tools to embed type information in
+identifiers in a reproducible and nonambiguous way.
 
-    # If the struct contains only lists, the primary stream will still be
-    # empty. Since an empty stream makes no sense, we special-case it away.
-    if M_0 = 0:
-        S -= 1
-        for i in 0 to S - 1:
-            M_i = M_i+1
-            D_i = D_i+1
+Let us first define the human-readable grammar with EBNF syntax, where
+`positive` represents a positive integer with regular expression
+`/[1-9][0-9]*/`, and `identifier` represents an identifier with regular
+expression `[a-zA-Z_][a-zA-Z0-9_]*`.
 
-For simple structures such as `(b1,b2)`, this means that the logical stream
-behaves as `b3` would, with the data elements concatenated LSB-first.
+```
+bitfield    = "b" , positive ;
+sequence    = "[" , river , "]" ;
+flatten     = "-" , river , "-" ;
+union       = "{" , river , "," , rivers , "}" ;
+null-union  = "{" , "0" , "," , rivers , "}" ;
+tuple       = "(" , rivers , ")" ;
+bundle      = "|" , reversibles , "|" ;
+named       = identifier , ":" , river ;
 
-### Unions
+river       = bitfield   | sequence | flatten | union
+            | null-union | tuple    | bundle  | named ;
 
-A `union` with option types `T`, `U`, ... (denoted `{T,U,...}`) represents a
-data type built up out of the alternation of its option types (similar to a
-`union` in C). `union`s can also be nullable, in which case the first option
-(0) is reserved for null. The option chosen for each transfered union is
-encoded by means of a ceil(log(|options|))-bit unsigned number at the LSB end
-of the primary data stream element, where |options| is the number of options
-including null. The data is encoded similar to a struct, but the elements in
-the primary stream are overlapped (LSB-aligned). Any secondary streams of
-union options that have not been selected will not transfer any data (not even
-an empty sequence). The algorithm for constructing the logical stream of a
-union is as follows:
+reversible  = [ "^" ] , river ;
 
-    # The first field in the primary stream is the union option.
-    S = 1
-    M_0 = ceil(log2(|options|))
-    D_0 = 0
+rivers      = river , { "," , river } ;
+reversibles = reversible , { "," , reversible } ;
+```
 
-    for each element type T:
-        if D^T_0 = 0:
-            # Overlap the data elements of the primary streams if possible.
-            M_0 = max(M_0, M^T_0)
-
-        else:
-            # When the union option type is a list, we don't merge the
-            # streams.
-            M_S = M^T_0
-            D_S = D^T_0
-            S += 1
-
-        # Append any secondary streams of the union option to our list of
-        # secondary streams.
-        for i in 1 to S^T - 1:
-            M_S = M^T_i
-            D_S = D^T_i
-            S += 1
-
-### Mapping between Arrow and Fletcher stream types
-
-Arrow types and Fletcher stream types do not map entirely one-to-one; in some
-cases there multiple Fletcher stream representations are possible. It is then
-up to the user to choose which representation is most suitable for the
-application, along with the N parameter for each physical stream.
-
-In general, the following mappings are possible.
-
-| Arrow type                      | Fletcher stream type                                        |
-|---------------------------------|-------------------------------------------------------------|
-| Non-nullable arrays             | `list` or `vector` of array type                            |
-| Nullable arrays                 | `list` or `vector` of `union` of null and the array type    |
-| Fixed-length primitive types    | `bits`                                                      |
-| Variable-length primitive types | `list` or `vector` of `bits`                                |
-| Nested lists                    | `list` or `vector`                                          |
-| Nested structs                  | `struct`                                                    |
-| Nested unions                   | `union`                                                     |
-| Dictionaries                    | encoded as dictionary index (`bits`) or as the mapped value |
-
-Random-access streams
----------------------
-
-When data originates from a (chunked) Arrow array, allowing a kernel to perform
-random access costs very little, but greatly increases the potential for
-development of efficient solutions. This is
-
-
-
-
-
-
-
-
-
-
-
-
-
-Data type serialization
------------------------
-
-Arrow supports a number of recursively defined data types for arrays, which the
-streams must be able to carry. For simple data types, a single stream is
-sufficient, but in general a data type is handled by one or more independent
-streams, each with their own `M` (and interpretation of those `M` bits) and
-`D` parameter determined by the type. The values for the `N`, `C`, and `U`
-parameters are left up to the designer and/or implementation.
-
-We first formally define a type system for such stream bundles that is a
-superset of the types supported by Arrow. Then we define how the stream bundles
-can be constructed from any such type.
-
-### Type system
-
-We define two primitive types: null, written as `0` for brevity, and bit
-vectors, written as `b<N>`, where `<N>` is a positive integer. The `0` type is
-only used within unions. We can then recursively combine these types in the
-form of structs (denoted `(T,S,...)`), unions (denoted `{T,S,...}`), lists
-(denoted `[T]`), and vectors (denoted `<T>`).
-
-
-
-Fletcher streams are however defined on a lower
-abstraction level than Arrow. Our type system is defined as follows.
-
- - The primitive type is an element of N bits, named `b<N>` (for example,
-   `b8` for a byte).
-
- - Structures: one or more elements with potentially different types grouped
-   together. This is denoted with parentheses, for instance `(b8,b1)` describes
-   a structure with a byte and a bit. When serializing, elements are ordered
-   LSB-first, traversing any hierarchy depth-first; for instance,
-   `(b4,(b1,b2),b8)` is serialized as `8888888822114444`.
-
- - Unions and nullables: two or more elements with potentially different types
-   of which only one is valid. This is denoted with curly braces, for instance
-   `{b8,b1}` describes a union of a byte and a bit. Unions optionally allow for
-   a special null case as well, indicated with the type `0`, which should be
-   the first option; for instance, `{0,b8}` represents a nullable byte. Unions
-   are serialized as a structure consisting of an identifier field of size
-   ceil(log2(N)), where N is the number of options, followed by a data field of
-   the maximum size of the possible types, LSB-aligned. The identifier field
-   indexes which of the union elements is valid, starting from 0. For instance,
-   for the type `{0,b4,b8}`, the serialization behaves like `(b2,b8)`, which is
-   serialized as `8888888822`; the value `----010101` for instance denotes the
-   second type (`b4`), with value 5.
-
-Nested Arrow lists and Arrow arrays cannot be represented as simple element
-types, as they do not have a fixed width. Such variable-length types often
-require multiple parallel streams. These streams each get their own handshake.
-To simplify the interfaces in VHDL, the signals for these streams may be
-concatenated, turning each signal (including the `valid` and `ready` handshake
-signals) into bit vectors. When this is done, the signals are concatenated
-LSB-first.
-
-Two distinct ways are defined to represent variable-length types, each having
-their own advantages and disadvantages. These are named "lists" and "vectors"
-to distinguish them, but it is important to realize that they are used to
-represent the same Arrow types! The differences are as follows:
-
- - The list representation, denoted `[T]` for a sequence of elements of type
-   `T`, uses an additional `last` signal to convey where the list boundaries
-   are. This allows for potentionally infinitely long sequences, or sequences
-   where the length is not known in advance. However, at most a single sequence
-   can be transferred per cycle, regardless of the number of elements per cycle
-   of the stream (`N`).
-
- - The vector representation, denoted `<T>` for a sequence of elements of type
-   `T`, uses two streams: a length stream of type `b32`, and a data stream of
-   type `T`. The dimensionality of both streams (`D`) is the same; the data
-   stream is said to transfer the flattened data of the stream of lists. This
-   allows for multiple sequences to be transferred per cycle by increasing `N`
-   of the length stream, assuming that the sequences are short enough. However,
-   the length of each sequence is limited to 4294967295. Furthermore, sources
-   of such streams must make the length for a sequence available to the sink
-   before sending the first data element, otherwise deadlocks may occur;
-   therefore, the length must be known in advance.
-
-Special cases arise for complex structures that combine lists and vectors with
-structs and unions. Similar to vectors, these require multiple streams running
-alongside each other. The following semantics are defined:
-
- - For structures containing lists, such as `(T,[S])`, each list in the
-   structure, and (if there is at least one element), the non-list elements
-   concatenated together, get their own stream. In the non-list element stream
-   the lists are ignored during serialization; for instance, for
-   `([b3],b4,[[b5]],b6,[b7])`, the non-list stream is serialized as
-   `6666664444`. `b3`, `b5`, and `b7` each get their own stream, with `D`
-   incremented appropriately. The streams are ordered `(b4,b6)`, `[b3]`,
-   `[[b5]]`, `[b7]`; the non-list stream is always first, followed by the list
-   streams in struct order.
-
- - For structures containing vectors, such as `(T,<S>)`, the vector lengths are
-   carried along with the non-list stream as if the type was `(T,b32)`, and the
-   vector data is carried by an independent stream of type `S`. When combined
-   with lists, the independent data streams follow struct order; for instance,
-   for `(<b3>,b4,[[b5]],b6,<b7>)`, the order and datatypes of the streams are
-   `(b32,b4,b6,b32)`, `b3`, `[[b5]]`, and `b7`.
-
- - The synthesis of streams for mixtures of lists and vectors follow from the
-   above rules. For example, `[<b3>]` results in a stream of type `[b32]` for
-   the list of vector lengths, and a stream of type `[b3]` for the vector data.
-   Note that only the data within the vector container is flattened, so the
-   data stream is still a one-dimensional list. The data `[<1, 2, 3>, <4, 5>]`
-   would be transferred as `[3, 2]` on the first stream, and as
-   `[1, 2, 3, 4, 5]` for the second stream. The other way around, `<[b3]>`,
-   results in a different (and less useful) form, being a length stream of
-   type `b32` and a data stream of type `[b3]`. The data `<[1, 2, 3], [4, 5]>`
-   would then be transferred as `2` on the first stream, and as
-   `[1, 2, 3], [4, 5]` for the second stream.
-
- - Unions containing lists, such as `{T,[S]}`, are serialized as two streams,
-   one for the identifier field and one for the unioned data. All data is
-   always passed through the secondary stream, regardless of whether the data
-   is of a list type or not. The dimensionality of the data stream is taken
-   from the highest dimensionality necessary. For instance, for
-   `{d2,[[d3]],[d4]}`, the non-list stream consists of `b2` for the identifier,
-   and the data stream is of type `[[d4]]` respective to it, carrying either
-   a single `d2`, a two-dimensional `d3`, or a one-dimensional `d4`,
-   LSB-aligned and surrounded by as many single-element lists as needed. That
-   is to say, `[1, 2, 3]` for union option `[d4]` will be represented as
-   `[[1, 2, 3]]`. Null data behaves like a 0-width vector, and will thus be
-   represented as `[[0]]`.
-
- - For unions containing vectors, the vector data type is regarded as its `b32`
-   length, and the data stream is always inferred independently.
-
-
-These streams may be "concatenated" in hardware when necessary; in
-   this case, each signal (including `valid` and `ready`) is concatenated to
-   a vector, LSB-first in struct order.
-
-Stream primitives
------------------
-
-A set of primitive operations for generic Fletcher streams is defined in this
-section. Any Fletcher stream IP library implementation should include these
-components.
-
-### Buffer
-
-A stream buffer consists of a number of slice registers or and/or FIFO that can
-store a configurable number of stream transfers. Buffers are used to break
-critical paths and wherever a FIFO.
-
-### Xclock
-
-An xclock connects a stream in one clock domain to a stream in another clock
-domain.
-
-### Normalizer
-
-A normalizer takes any valid Fletcher stream and converts the transfers to
-
-TODO
-
-A single logical stream of data can be encoded in many different ways by a
-Fletcher stream, due to the `stai`, `endi`, and `empty` signals. In this
-section we define the notion of a normalized Fletcher stream, for which there
-is a one-to-one mapping between a logical data stream and the Fletcher stream
-transfers for a given value for N (the number of elements per cycle/element
-lanes in the stream).
-
-For a Fletcher stream to be considered normalized, the following additional
-requirements must be adhered to while `valid` is asserted:
-
- - `empty` may only be asserted when `last` is nonzero.
- - `endi` must be N-1 unless `last` is nonzero.
- - `stai` must be 0 at all times and may thus be omitted.
- - The `last` vector must be thermometer-coded at all times. That is, if bit
-   *i* is asserted, bit *i*-1 must also be asserted, for all *i* in 1..D-1.
-
-The process of normalizing a Fletcher stream requires some logic. This logic
-necessarily has the following characteristics:
-
- - N'xM N-wide multiplexers are needed to be able to connect all incoming
-   element lanes to all outgoing element lanes, where N relates to the incoming
-   stream and N' relates to the outgoing stream. For wide streams, an efficient
-   implementation of the normalizer, and current FPGA technology, this
-   multiplexer is dominates the resource utilization of the normalizer.
- - If *i*xN' elements have been received at the input, no output can be
-   generated yet, because subsequent transfers with the `empty` flag set may
-   affect the `last` vector for the next output transfer. The sole exception
-   is when the MSB of the `last` vector is also set. Thus, even if the input is
-   normalized, all transfers but the last transfer of the outermost packet will
-   be withheld until the next is available. This is important to consider when
-   the source may block until the sink has processed all data sent by it up to
-   that point; this may cause a deadlock when a normalizer is in between.
-
-### Resizing (serialization or parallelization)
-
-The process of resizing a Fletcher stream is the process of varying N; that is,
-varying the number of element lanes/elements per cycle. This is commonly done
-before or after a clock domain crossing.
-
-A distinction is made between complete resizing and incomplete resizing.
-Complete resizing is equivalent to normalization; as many element lanes are
-used on the output stream as possible in all transfers. Incomplete resizing
-does not require this. For instance, simply increasing N without modifying
-the stream transfers at all is a valid form of incomplete parallelization.
-An incomplete serializer may consider only one incoming transfer at a time,
-which may be suboptimal if the ratio between the input element lane count
-and the output element lane count is non-integer or the input stream is not
-normalized. However, significantly less logic may be needed for an adequate
-incomplete resizer versus a complete resizer.
-
-Reshaping
+The name-mangling representation has the same rules, but uses letters in place
+of symbols and a slightly simplified syntax. To disambiguate between letters
+that carry grammatical meaning and identifiers, the identifiers are
+underscore-terminated, and underscores in the user-specified identifier must
+be replaced with a double underscore.
 
+```
+bitfield    = positive ;
+sequence    = "s" , river ;
+flatten     = "f" , river ;
+union       = "u" , river , "c" , rivers , "e" ;
+null-union  = "n" , rivers , "e" ;
+tuple       = "t" , rivers , "e" ;
+bundle      = "b" , reversibles , "e" ;
+named       = "_" , identifier , "_" , river ;
+
+river       = bitfield   | sequence | flatten | union
+            | null-union | tuple    | bundle  | named ;
+
+reversible  = [ "r" ] , river ;
+
+rivers      = river , { "c" , river } ;
+reversibles = reversible , { "c" , reversible } ;
+```
+
+# Random notes follow, WIP
+
+
+b<width>    -> bit field with the given width
+[T]         -> increase the dimensionality of T (surround T with a normal domain)
+-T-         -> flatten T (surround T with a flattening domain)
+<prefix>: T -> add a prefix to all identifiers
+{T,U,...}   -> union of T, U, ...
+{0,T,U,...} -> union of null, T, U, ...
+(T,U,...)   -> tuple of T, U, ... represented by data fields in a single stream where possible
+|T,^U,...|  -> tuple of T, U, ... represented by a different stream for each field, possibly in reverse direction
+
+
+
+an ordered set of dimensions $X_i$. A dimension consists of a reference to
+a parent dimension $p_i$ (which can be $\varnothing$), zero or more streams
+$S_{i_j}$, and a flattening flag $f_i$. That is:
+
+$X_i = \{ p_i, S_{i_j}, f_i \}$
+
+Within this context, each stream is defined by an ordered set of fields
+
+
+
+
+
+
+
+
+
+The types are described recursively
+through a set of operators. These are:
+
+ - the structure operator;
+ - the union operator;
+ - the sequence operator;
+ - the bundle operator.
+
+We also specify two grammars for representing these operators, one that is
+intended to be human-readable, and one that can be described within an
+identifier (case-insensitive alphanumeric plus underscore) to serve a similar
+purpose as C++ type/name mangling.
+
+Before we can describe the operators, we need to define a representation for
+them to operate on.
+
+
+
+
+
+
+We define that a river $R$ consists of
+one or more streams $S_i$ and one or more domains $G_j$:
+
+$R = \{ S_{0..|S|-1}, G_{0..|G|-1} \}$
+
+In this context, each stream consists of the names and bit widths of zero or
+more data fields $F_j$, a name for the stream itself, reverse-direction flag
+$R$, and domain index $g$. Ignoring the name tags, a stream is therefore
+defined as
+
+$S_i = \{ F_{i_j}, R_i, g_i \}$
+
+A domain consists of a parent stream index $p$, which can also be
+$\varnothing$, a dimensionality $D$, and a flattening flag $F$. It is therefore
+defined as
+
+$G_i = \{ p_i, D_i, F_i \}$
+
+The dimensionality and element width of $S_i$ are defined as follows:
+
+$D_{S_i} = \sum_{f \in F_i} |f|$
+
+$M_{S_i} = D_{g_i}
+
+where $|f|$ denotes the bit-width of field $f$.
+
+The following definitions and conditions apply in addition:
+
+ - $S_0$ is defined to be the primary stream, while $S_i$ for $i \ge 1$ are
+   defined to be the secondary streams.
+
+ - $G_0$ is defined to be the primary domain, while $G_i$ for $i \ge 1$ are
+   defined to be the secondary domains.
+
+ - The primary stream must be part of the primary domain, i.e. $g_0 = 0$.
+
+ - The primary domain is the only domain to have no parent stream, i.e.
+   $p_0 = \varnothing$ and $p_i \ne \varnothing$ for $i \ge 1$.
+
+ - The directed graph formed by the $g$ and $p$ indices forms a tree of
+   domains, of which the primary domain is the root. That is, the graph can
+   not contain any cycles.
+
+
+
+
+or more domains, each containing one or more streams. The first stream in the
+first domain is called the primary stream ($S_0,0$), the remaining streams in
+the first domain are called secondary streams ($S_0,j$), and all the streams in
+the remaining domains are called tertiary stream ($S_i,j$). The significance of
+domains is that the dimensionality of all the secondary streams in a domain
+relate to the dimensionality of their primary stream
