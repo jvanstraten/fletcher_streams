@@ -757,37 +757,39 @@ a domain with the flattening flag set has $D = 0$. The remaining parameters do
 not relate to the type carried by the stream, and can thus be freely chosen by
 the designer.
 
-#### Grammatical description
+### Type construction
 
 We define two sets of equivalent grammars to recursively describe or construct
-a river, one intended to be human readable/writable, and one that uses only
-case-insensitive alphanumerical characters and underscores such that it can be
-embedded into an identifier. The latter serves a similar purpose as name
-mangling does in C++: to allow generative tools to embed type information in
-identifiers in a reproducible and nonambiguous way.
+the type of a river, one intended to be human readable/writable, and one that
+uses only case-insensitive alphanumerical characters and underscores such that
+it can be embedded into an identifier. The latter serves a similar purpose as
+name mangling does in C++: to allow generative tools to embed type information
+in identifiers in a reproducible and nonambiguous way.
 
 Let us first define the human-readable grammar with EBNF syntax, where
 `positive` represents a positive integer with regular expression
 `/[1-9][0-9]*/`, and `identifier` represents an identifier with regular
 expression `[a-zA-Z_][a-zA-Z0-9_]*`.
 
-```
+```ebnf
+(* functional rules *)
 bitfield    = "b" , positive ;
 sequence    = "[" , river , "]" ;
 flatten     = "-" , river , "-" ;
-union       = "{" , river , "," , rivers , "}" ;
-null-union  = "{" , "0" , "," , rivers , "}" ;
-tuple       = "(" , rivers , ")" ;
-bundle      = "|" , reversibles , "|" ;
+bundle      = "|" , [ reversibles ] , "|" ;
+tuple       = "(" , [ rivers ] , ")" ;
+union       = "{" , [ rivers ] , "}" ;
+null-union  = "{" , "0" , [ "," , rivers ] , "}" ;
 named       = identifier , ":" , river ;
 
+(* toplevel rule *)
 river       = bitfield   | sequence | flatten | union
             | null-union | tuple    | bundle  | named ;
 
+(* helper rules *)
+rivers      = river , { "," , river } , [ "," ] ;
 reversible  = [ "^" ] , river ;
-
-rivers      = river , { "," , river } ;
-reversibles = reversible , { "," , reversible } ;
+reversibles = reversible , { "," , reversible } , [ "," ] ;
 ```
 
 The name-mangling representation has the same rules, but uses letters in place
@@ -796,24 +798,215 @@ that carry grammatical meaning and identifiers, the identifiers are
 underscore-terminated, and underscores in the user-specified identifier must
 be replaced with a double underscore.
 
-```
+```ebnf
+(* functional rules *)
 bitfield    = positive ;
 sequence    = "s" , river ;
 flatten     = "f" , river ;
-union       = "u" , river , "c" , rivers , "e" ;
-null-union  = "n" , rivers , "e" ;
-tuple       = "t" , rivers , "e" ;
-bundle      = "b" , reversibles , "e" ;
+bundle      = "b" , [ reversibles ] , "e" ;
+tuple       = "t" , [ rivers ] , "e" ;
+union       = "u" , [ rivers ] , "e" ;
+null-union  = "n" , [ rivers ] , "e" ;
 named       = "_" , identifier , "_" , river ;
 
+(* toplevel rule *)
 river       = bitfield   | sequence | flatten | union
             | null-union | tuple    | bundle  | named ;
 
-reversible  = [ "r" ] , river ;
-
+(* helper rules *)
 rivers      = river , { "c" , river } ;
+reversible  = [ "r" ] , river ;
 reversibles = reversible , { "c" , reversible } ;
 ```
+
+The following sections describe the semantics of the functional rules.
+
+#### Bitfield
+
+```ebnf
+bitfield = "b" , positive ;
+```
+
+A bitfield represents any higher-level datatype that can be represented with a
+nonzero, fixed number of bits. What kind of value is represented by the
+bitfield and how is out of the scope of this layer of the specification.
+
+The described river consists of a single domain $X$, with
+
+$X = ( \varnothing{}, ( S_0 ), 0 )$
+
+$S_0 = ( \varnothing{}, ( F_0 ) , 0 )$
+
+$F_0 = ( \varnothing{}, n )$
+
+where $n$ is the positive number of bits defined by the rule.
+
+#### Sequence
+
+```ebnf
+sequence = "[" , river , "]" ;
+```
+
+The sequence operator transforms a river data type into a sequence thereof by
+adding a domain.
+
+The described river consists of a new root domain $X$, with
+
+$X = ( \varnothing{}, \varnothing{}, 0 )$
+
+The domain tree from the child type is added as a child of $X$.
+
+#### Flatten
+
+```ebnf
+flatten = "-" , river , "-" ;
+```
+
+The flattening operator indicates that the child river type is a flattened
+representation of a new root domain. That is, all `last` flags of the root
+domain are removed. Note that this operator is functionally no-op unless it is
+the descendant of a sequence operator; that is, the domain added by this
+operator does not *remain* the root.
+
+If the root domain of the child type is not flattened (its $f = 0$), the
+described river consists of a new root domain $X$, with
+
+$X = ( \varnothing{}, \varnothing{}, 1 )$
+
+The domain tree from the child type is then added as a child of $X$.
+
+If the root domain of the child type is flattened (its $f = 1$), the operator
+is no-op; that is, the domain tree of the child tree is returned without
+modification.
+
+#### Bundle
+
+```ebnf
+reversible  = [ "^" ] , river ;
+reversibles = reversible , { "," , reversible } , [ "," ] ;
+bundle      = "|" , [ reversibles ] , "|" ;
+```
+
+The bundling operator combines a number of child river types together into one.
+The logical datatype equivalent for this is a structure, tuple, or record, so
+the root domains of the child types are combined together. In the physical
+representation, the streams of the subrivers remain separated, so the transfers
+that constitute the logical structure can occur in different cycles.
+
+The direction of one or more of the subrivers can be reversed. This allows the
+sink to send back control information. For instance, a source may grant random
+access to a large vector to a sink by allowing the sink to send it a stream of
+indices, to which the source then replies with the data. When reversed streams
+are involved, it is of exceptional importance that the inter-stream
+dependencies (specified later) are adhered to. Summarizing those dependencies
+briefly; if stream $S$ is listed before stream $S'$ in the type, stream $S$
+acts as a command stream for stream $S'$.
+
+The described river consists of root domain $X$, which is constructed by
+merging the root domains of the child types $X_{0..n-1}$ into one. If the root
+of all the child types have the same value for $f$ (the flattening flag), the
+following holds:
+
+$X = ( \varnothing{}, \prod\limits_{i=0}^{n-1} S_{X_i}, f_{X_0} )$
+
+where $\prod$ signifies concatenation. If there are both child domains with
+$f = 0$ and $f = 1$, the following holds:
+
+$X = ( \varnothing{}, \prod\limits_{i=0}^{n-1} \left\{\begin{matrix} S_{X_i} & f_{X_i} = 0 \\ \varnothing & f_{X_i} = 1 \end{matrix}\right. , 0 )$
+
+$X' = ( \varnothing{}, \prod\limits_{i=0}^{n-1} \left\{\begin{matrix} \varnothing & f_{X_i} = 0 \\ S_{X_i} & f_{X_i} = 1 \end{matrix}\right. , 1 )$
+
+where $X$ is the new root domain, and $X'$ is a child domain thereof.
+
+In both cases, the descendent domains of the child types are not merged
+together, and become descendents of the domain their roots were merged into.
+
+If a child type is reversed (by means of a caret prefix), the $r$ flag for
+all its streams is inverted.
+
+If the bundle operator has zero types as its input, it returns a null river,
+consisting only of root domain $X_\varnothing$, defined as
+
+$X_\varnothing = ( \varnothing{}, \varnothing{}, 0 )$
+
+#### Tuple
+
+```ebnf
+tuple = "(" , [ rivers ] , ")" ;
+```
+
+The tuple operator is very similar to the bundling operator. It only differs in
+the physical representation of the first stream of each child type: for a tuple
+these are merged together, while for a bundle they remain separate streams. The
+primary child streams $S_{X_{0..n-1}},0$ are merged into stream $S_{X,0}$ as
+follows:
+
+$S_{X,0} = ( \varnothing{}, \prod\limits_{i=0}^{n-1} \left\{\begin{matrix} \varnothing & |S_{X_i}| = 0 \vee r_{X_i,0} = 1 \\ F_{X_i,0} & |S_{X_i}| > 0 \wedge r_{X_i,0} = 0 \end{matrix}\right. , 0 )$
+
+That is, the field tuple of the merged stream is the concatenation of the field
+tuples of the first stream in the root domain of each child data type that has
+at least one stream in the root domain and this first stream is not reversed.
+
+The remaining streams and domains of the child types are represented as they
+would be in a bundle.
+
+Note that it is possible to get a stream with zero fields this way. While it
+does not carry data, its handshake and control signals may still be relevant
+for the streamlets, therefore it is not pruned.
+
+If the tuple operator has zero types as its input, it returns a river with a
+single domain $X$, satisfying
+
+$X = ( \varnothing{}, ( S_\varnothing ), 0 )$
+
+where
+
+$S_\varnothing = ( \varnothing{}, \varnothing{}, 0 )$
+
+#### Union
+
+```ebnf
+union      = "{" , [ rivers ] , "}" ;
+null-union = "{" , "0" , [ "," , rivers ] , "}" ;
+```
+
+The union operators combine a number of child river types together into one;
+however, unlike tuples and bundles, only one of the child data types is valid
+at a time. The logical datatype equivalent for this is a union, option, or
+variant. Which data type is valid for each element is signified by an option ID
+field.
+
+...
+
+The remaining streams and domains of the child types are represented as they
+would be in a bundle. However, **TODO**
+
+
+
+
+#### Named
+
+```ebnf
+named = identifier , ":" , river ;
+```
+
+
+
+### Physical representation of river types
+
+
+
+
+#### Inter-stream dependencies
+
+
+
+
+
+
+
+
+
 
 # Random notes follow, WIP
 
