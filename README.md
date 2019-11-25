@@ -1086,127 +1086,144 @@ innermost common domain, for all $i \ge 0 \wedge j \ge 1 \wedge i + j < n$.
 
 
 
+
 # Random notes follow, WIP
 
-To avoid deadlocks, the following inter-stream dependencies must be observed.
+Logical layer specification
+---------------------------
 
- - A source may delay providing the first
+This layer provides mappings for higher-level data types and transfer methods
+using the type system provided by the primitive layer. Users are free to define
+their own types in addition if the provided types do not meet their
+requirements, as long as they are representable using the primitive layer.
+Essentially, the provided types are syntactic sugar on top of the primitive
+types.
 
-assume that the sink will not block any of the transfers
-   relating to $\textup{gce}(i, i+j)$ on stream $i$ until it has seen the
+### Type specification
+
+We will use the following grammar to describe logical types. Note that it is a
+superset of the primitive layer type specification.
+
+```ebnf
+(* primitive type rules *)
+bitfield    = "b" , positive ;
+sequence    = "[" , river , "]" ;
+flatten     = "-" , river , "-" ;
+reverse     = "^" , river ;
+bundle      = "|" , [ rivers ] , "|" ;
+tuple       = "(" , [ rivers ] , ")" ;
+union       = "{" , rivers , "}" ;
+null-union  = "{" , "0" , [ "," , rivers ] , "}" ;
+named       = identifier , ":" , river ;
+
+(* logical type rule; maps to primitive types through templating *)
+logical     = identifier , [ "<" , rivers , ">" ] ;
+
+(* any river type *)
+river       = bitfield | sequence | flatten
+            | reverse  | union    | null-union
+            | tuple    | bundle   | named
+            | logical ;
+
+(* typedef rule, allowing logical types to be defined *)
+definition  = identifier , [ "<" , bindings , ">" ] , "=" , river , ";" ;
+
+(* helper rules for typedefs *)
+repetition  = "*" | "+" | "?" ;
+bindings    = identifier , { "," , identifier } , [ repetition ] , [ "," ] ;
+
+(* toplevel rule including type definitions *)
+type        = { definition } , river ;
+
+(* rules for lists of rivers *)
+multi-river = river | ( identifier , repetition ) ;
+rivers      = multi-river , { "," , multi-river } , [ "," ] ;
+```
+
+where `positive` represents a positive integer with regular expression
+`/[1-9][0-9]*/`, and `identifier` represents an identifier with regular
+expression `[a-zA-Z_][a-zA-Z0-9_]*`.
+
+The primitive rules operate as they do in the primitive layer specification.
+
+The `definition` rule allows users to specify their own logical types, and the
+primitive types they expand to. The binding list between the `<>` allows for
+substitution of subtypes in the definition; for instance, defining
+`List<T> = [T]` allows for instance `List<List<b10>>` to be used in place of
+`[[b10]]` later. The last binding can optionally be given a `*`, `+`, or `?`
+suffix, signifying that it can be bound to zero or more, one or more, or
+zero or one type respectively. Such bindings can only be used in the template
+where a list of types is legal. The binding identifiers must be
+case-insensitively unique within the context of the typedef, and are matched
+case-insensitively in the template.
+
+The `logical` rule simply expands a previously defined template. The matching
+is done based on a case-insensitive match of the type identifier, and the
+number of type bindings. Type definitions can thus be overloaded. However, the
+identifier/number-of-type-bindings pair must be case-insensitively unique
+within a single invocation of the toplevel `type` rule. The pattern in a type
+definition can refer to any other type definition regardless of ordering.
+
+### Standard types
+
+The following types are defined by this specification.
+
+#### Primitive aliases
+
+The following aliases are provided for the primitives.
+
+```
+List<T>      = [T];
+Bundle<T*>   = |T*|;
+Tuple<T*>    = (T*);
+Union<T+>    = {T+};
+Nullable<T*> = {0, T*};
+```
+
+#### Vectors
+
+```
+Vec<T>   = |len: b32, [-T-]|;
+Vec64<T> = |len: b64, [-T-]|;
+```
+
+The `Vec` type (short for vector) uses a different representation for a
+sequence compared to a list: instead of using a `last` flag, the data is
+communicated in a flattened way, with the sequence length and higher-order
+domains encoded as a separate length stream. Unlike lists, vectors allow
+multiple (short) sequences to be transferred per cycle, as long as the $N$
+parameter is large enough for both streams for a given dataset. However, they
+require the length to be known in advance.
+
+`Vec<T>` can be trivially converted into `List<T>` by a streamlet that simply
+counts the batches in the flattened data stream and introduces a `last` marker
+based on the `last` field of the length stream when the count hits the
+transferred length. However, conversion from `List<T>` to `Vec<T>` is
+nontrivial (and infeasible in the general case), as the length must be provided
+before the first data transfer due to the inter-stream dependency requirements.
+This length is not known until the entire input sequence is consumed, thus such
+a component must be capable of buffering at least one full sequence.
+
+#### Random access to memory regions
+
+```
+ROM<T> =
+WOM<T> =
+RAM<T> = |ROM<T>, WOM<T>
+```
+
+#### Random access to streams of sequences
+
+The following types are provided to allow a sink random access to a sequence
+known by the source. This is somewhat equivalent to AXI4
 
 
- - A source must provide/validate the last transfer on stream $i$ before it is
-   allowed to wait for the sink to handshake the first transfer on stream
-   $i+j$, for all $i \ge 0 \wedge j \ge 1 \wedge i + j < n$. The "first" and
-   "last" transfer here refer to the transfers containing the first/last
-   transfers (including `last` marker) of the greatest common element in the
-   two streams.
+sequence    = "[" , river , "]" ;
+flatten     = "-" , river , "-" ;
+reverse     = "^" , river ;
+bundle      = "|" , [ rivers ] , "|" ;
+tuple       = "(" , [ rivers ] , ")" ;
+union       = "{" , rivers , "}" ;
+null-union  = "{" , "0" , [ "," , rivers ] , "}" ;
+named       = identifier , ":" , river ;
 
- - A sink may not depend on the completion of any transfer on stream $i+j$ to
-   unblock a transfer on stream $i$, for all $i \ge 0 \wedge j \ge 1 \wedge i + j < n$.
-
-
-
-
-
-b<width>    -> bit field with the given width
-[T]         -> increase the dimensionality of T (surround T with a normal domain)
--T-         -> flatten T (surround T with a flattening domain)
-<prefix>: T -> add a prefix to all identifiers
-{T,U,...}   -> union of T, U, ...
-{0,T,U,...} -> union of null, T, U, ...
-(T,U,...)   -> tuple of T, U, ... represented by data fields in a single stream where possible
-|T,^U,...|  -> tuple of T, U, ... represented by a different stream for each field, possibly in reverse direction
-
-
-
-an ordered set of dimensions $X_i$. A dimension consists of a reference to
-a parent dimension $p_i$ (which can be $\varnothing$), zero or more streams
-$S_{i_j}$, and a flattening flag $f_i$. That is:
-
-$X_i = \{ p_i, S_{i_j}, f_i \}$
-
-Within this context, each stream is defined by an ordered set of fields
-
-
-
-
-
-
-
-
-
-The types are described recursively
-through a set of operators. These are:
-
- - the structure operator;
- - the union operator;
- - the sequence operator;
- - the bundle operator.
-
-We also specify two grammars for representing these operators, one that is
-intended to be human-readable, and one that can be described within an
-identifier (case-insensitive alphanumeric plus underscore) to serve a similar
-purpose as C++ type/name mangling.
-
-Before we can describe the operators, we need to define a representation for
-them to operate on.
-
-
-
-
-
-
-We define that a river $R$ consists of
-one or more streams $S_i$ and one or more domains $G_j$:
-
-$R = \{ S_{0..|S|-1}, G_{0..|G|-1} \}$
-
-In this context, each stream consists of the names and bit widths of zero or
-more data fields $F_j$, a name for the stream itself, reverse-direction flag
-$R$, and domain index $g$. Ignoring the name tags, a stream is therefore
-defined as
-
-$S_i = \{ F_{i_j}, R_i, g_i \}$
-
-A domain consists of a parent stream index $p$, which can also be
-$\varnothing$, a dimensionality $D$, and a flattening flag $F$. It is therefore
-defined as
-
-$G_i = \{ p_i, D_i, F_i \}$
-
-The dimensionality and element width of $S_i$ are defined as follows:
-
-$D_{S_i} = \sum_{f \in F_i} |f|$
-
-$M_{S_i} = D_{g_i}
-
-where $|f|$ denotes the bit-width of field $f$.
-
-The following definitions and conditions apply in addition:
-
- - $S_0$ is defined to be the primary stream, while $S_i$ for $i \ge 1$ are
-   defined to be the secondary streams.
-
- - $G_0$ is defined to be the primary domain, while $G_i$ for $i \ge 1$ are
-   defined to be the secondary domains.
-
- - The primary stream must be part of the primary domain, i.e. $g_0 = 0$.
-
- - The primary domain is the only domain to have no parent stream, i.e.
-   $p_0 = \varnothing$ and $p_i \ne \varnothing$ for $i \ge 1$.
-
- - The directed graph formed by the $g$ and $p$ indices forms a tree of
-   domains, of which the primary domain is the root. That is, the graph can
-   not contain any cycles.
-
-
-
-
-or more domains, each containing one or more streams. The first stream in the
-first domain is called the primary stream ($S_0,0$), the remaining streams in
-the first domain are called secondary streams ($S_0,j$), and all the streams in
-the remaining domains are called tertiary stream ($S_i,j$). The significance of
-domains is that the dimensionality of all the secondary streams in a domain
-relate to the dimensionality of their primary stream
