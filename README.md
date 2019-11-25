@@ -777,20 +777,20 @@ expression `[a-zA-Z_][a-zA-Z0-9_]*`.
 bitfield    = "b" , positive ;
 sequence    = "[" , river , "]" ;
 flatten     = "-" , river , "-" ;
-bundle      = "|" , [ reversibles ] , "|" ;
+reverse     = "^" , river ;
+bundle      = "|" , [ rivers ] , "|" ;
 tuple       = "(" , [ rivers ] , ")" ;
-union       = "{" , [ rivers ] , "}" ;
+union       = "{" , rivers , "}" ;
 null-union  = "{" , "0" , [ "," , rivers ] , "}" ;
 named       = identifier , ":" , river ;
 
 (* toplevel rule *)
-river       = bitfield   | sequence | flatten | union
-            | null-union | tuple    | bundle  | named ;
+river       = bitfield | sequence | flatten
+            | reverse  | union    | null-union
+            | tuple    | bundle   | named ;
 
-(* helper rules *)
+(* helper rule *)
 rivers      = river , { "," , river } , [ "," ] ;
-reversible  = [ "^" ] , river ;
-reversibles = reversible , { "," , reversible } , [ "," ] ;
 ```
 
 The name-mangling representation has the same rules, but uses letters in place
@@ -804,20 +804,20 @@ be replaced with a double underscore.
 bitfield    = positive ;
 sequence    = "s" , river ;
 flatten     = "f" , river ;
-bundle      = "b" , [ reversibles ] , "e" ;
+reverse     = "r" , river ;
+bundle      = "b" , [ rivers ] , "e" ;
 tuple       = "t" , [ rivers ] , "e" ;
-union       = "u" , [ rivers ] , "e" ;
+union       = "u" , rivers , "e" ;
 null-union  = "n" , [ rivers ] , "e" ;
 named       = "_" , identifier , "_" , river ;
 
 (* toplevel rule *)
-river       = bitfield   | sequence | flatten | union
-            | null-union | tuple    | bundle  | named ;
+river       = bitfield | sequence | flatten
+            | reverse  | union    | null-union
+            | tuple    | bundle   | named ;
 
-(* helper rules *)
+(* helper rule *)
 rivers      = river , { "c" , river } ;
-reversible  = [ "r" ] , river ;
-reversibles = reversible , { "c" , reversible } ;
 ```
 
 The following sections describe the semantics of the functional rules.
@@ -880,12 +880,21 @@ If the root domain of the child type is flattened (its $f = 1$), the operator
 is no-op; that is, the domain tree of the child tree is returned without
 modification.
 
+#### Reverse
+
+```ebnf
+reverse = "^" , river ;
+```
+
+The reverse operator reverses the direction of all the streams in the child
+type. That is, if it originally flowed from source to sink, it now flows from
+sink to source, turning its streams into control/command streams. Formally, it
+simply inverts the $r$ flag of all streams in all domains.
+
 #### Bundle
 
 ```ebnf
-reversible  = [ "^" ] , river ;
-reversibles = reversible , { "," , reversible } , [ "," ] ;
-bundle      = "|" , [ reversibles ] , "|" ;
+bundle = "|" , [ rivers ] , "|" ;
 ```
 
 The bundling operator combines a number of child river types together into one.
@@ -893,15 +902,6 @@ The logical datatype equivalent for this is a structure, tuple, or record, so
 the root domains of the child types are combined together. In the physical
 representation, the streams of the subrivers remain separated, so the transfers
 that constitute the logical structure can occur in different cycles.
-
-The direction of one or more of the subrivers can be reversed. This allows the
-sink to send back control information. For instance, a source may grant random
-access to a large vector to a sink by allowing the sink to send it a stream of
-indices, to which the source then replies with the data. When reversed streams
-are involved, it is of exceptional importance that the inter-stream
-dependencies (specified later) are adhered to. Summarizing those dependencies
-briefly; if stream $S$ is listed before stream $S'$ in the type, stream $S$
-acts as a command stream for stream $S'$.
 
 The described river consists of root domain $X$, which is constructed by
 merging the root domains of the child types $X_{0..n-1}$ into one. If the root
@@ -921,9 +921,6 @@ where $X$ is the new root domain, and $X'$ is a child domain thereof.
 
 In both cases, the descendent domains of the child types are not merged
 together, and become descendents of the domain their roots were merged into.
-
-If a child type is reversed (by means of a caret prefix), the $r$ flag for
-all its streams is inverted.
 
 If the bundle operator has zero types as its input, it returns a null river,
 consisting only of root domain $X_\varnothing$, defined as
@@ -967,7 +964,7 @@ $S_\varnothing = ( \varnothing{}, \varnothing{}, 0 )$
 #### Union
 
 ```ebnf
-union      = "{" , [ rivers ] , "}" ;
+union      = "{" , rivers , "}" ;
 null-union = "{" , "0" , [ "," , rivers ] , "}" ;
 ```
 
@@ -1077,6 +1074,17 @@ parameterized as follows:
    its field identifiers).
 
 #### Inter-stream dependencies
+
+Streamlets *may not* assume that any transfer in stream $i + j$ completes
+before all transfers in stream $i$ complete, within the context of the
+innermost common domain, for all $i \ge 0 \wedge j \ge 1 \wedge i + j < n$,
+where $n$ is the number of streams in the river.
+
+This allows streamlets to delay accepting transfers on stream $i + j$ until
+they complete all transfers on stream $i$, again within the context of the
+innermost common domain, for all $i \ge 0 \wedge j \ge 1 \wedge i + j < n$.
+
+
 
 # Random notes follow, WIP
 
