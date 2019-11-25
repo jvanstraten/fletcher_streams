@@ -137,14 +137,14 @@ Non-goals
 ---------
 
  - In this specification, a "streaming format" refers to the way in which the
-   voltages on a bundle of wires are used to communicate data. We expressly do
+   voltages on a bundle of wires are used to communicate data. It expressly does
    NOT mean streaming over existing communication formats such as Ethernet, and
    certainly not over abstract streams such as POSIX pipes or other
    inter-process communication paradigms. If you're looking for the former,
    have a look at Arrow Flight. The latter is part of Apache Arrow itself
    through their IPC format specification.
 
- - We do not intend to compete with the AXI4(-stream) specification.
+ - It is not intended to compete with the AXI4(-stream) specification.
    AXI4-stream is designed for streaming unstructured byte-oriented data;
    OpenTide streams are for streaming structured, complex data types.
 
@@ -152,9 +152,9 @@ Non-goals
    structures. Adding source and destination addressing or other routing
    information can be done through the user signal.
 
- - The primitive data type in OpenTide is a group of bits. We leave the mapping
-   from these bits to higher-order types such as numbers, characters, or
-   timestamps to existing specifications.
+ - The primitive data type in OpenTide is a group of bits. Mapping these bits to
+   higher-order types such as numbers, characters, or timestamps is left to
+   existing specifications.
 
 Document structure
 ------------------
@@ -517,7 +517,7 @@ The following rules apply.
  - The `empty` flag can be used to delay termination of a dimension. In this
    case, the `last` value need not always be thermometer code. For instance,
    a transfer with `last` = `"001"` followed by a transfer with `last` =
-   `"110"` and empty driven `'1'` is a legal way to terminate batch. However,
+   `"110"` and empty driven `'1'` is a legal way to terminate a batch. However,
    each dimension must only be terminated once, and must be terminated in inner
    to outer order. For instance, `last` = `"010"` followed by `last` = `"101"`
    is illegal because the order is violated. `last` = `"001"` with `empty` =
@@ -602,8 +602,8 @@ At first glance, the `strb` signal appears to make `stai`, `endi`, and `empty`
 redundant, as the `strb` signal on its own can describe any lane utilization
 that can be described through those signals and more. The fact that AXI4-stream
 uses `TSTRB` (and `TKEEP`) for this purpose lends further credence to this
-thought. We nevertheless specify `stai`, `endi`, and `empty` for the following
-reasons.
+thought. Nevertheless, `stai`, `endi`, and `empty` are specified for the 
+following reasons.
 
  - Many data sources by design output on consecutive lanes, and thus have no
    need for a full `strb` signal. This is typically the case, for instance,
@@ -660,7 +660,7 @@ vector of width three, and so on.
 Primitive layer specification
 -----------------------------
 
-This layer specifies how a group of OpenTide streams, known as a river, can be
+This layer specifies how a group of OpenTide streams, known as a River, can be
 used to transfer complex nested types. The "primitive" in the name refers to
 the fact that such nested types are typically primitives in higher-order
 data-oriented languages.
@@ -674,12 +674,12 @@ their design.
 
 ### Type representation
 
-We first specify a generic type system that describes exactly the set of
-primitive types supported by rivers.
+First, a generic type system is specified that describes exactly the set of
+primitive types supported by Rivers.
 
 #### Intuitive description
 
-A river allows transferrence of data of types recursively defined using the
+A River allows transferrence of data of types recursively defined using the
 following primitives:
 
  - a value of a certain bit-width;
@@ -697,7 +697,7 @@ logical specification, if used, intends to impose more strict requirements on
 these representations to increase the odds of two independently developed
 streamlets sharing the same interface where applicable.
 
-To handle sequences in particular, we define the notion of domains. A domain
+To handle sequences in particular, the notion of domains is defined. A domain
 is essentially defined to be a group of one or more physical streams that are
 guaranteed to carry the same "shape" of data at runtime in terms of nested
 sequences. For instance, if a stream were to convey the nested structure
@@ -709,10 +709,10 @@ for these streams is the same, but their data flows cannot logically be merged.
 Domains form a tree-like structure, where each added dimension adds a branch.
 For instance, both the previously mentioned domains may have the same parent
 domain, wherein the streams transfer data of the form $[k, l]$. Using the type
-notation we will define more formally later, this structure would result from
+notation (define more formally later), this structure would result from
 for instance `[([T], [U])]`.
 
-We also define a special kind of domain, called a flattening domain. Such a
+A special kind of domain, called a flattening domain is also defined. Such a
 domain bears no significance in the logical sense; it has the same logical
 dimensionality as its parent domain, and the data carried by it also has the
 same shape. However, the $D$ parameter of the physical streams belonging to
@@ -721,18 +721,18 @@ the data can only be recovered by copying the shape over from a stream in the
 parent domain, or by reconstructing it through some other means.
 
 Flattening domains may seem like an odd concept at first glance, but turn out
-to be useful in practice, for instance to describe a river consisting of a
+to be useful in practice, for instance to describe a River consisting of a
 length stream and a flattened data stream (this is called a `Vec` in the
 logical layer). Such structures are particularly important in the context of
 wide streams (large $N$) carrying many short sequences; without flattening,
 each transfer can fundamentally carry at most one sequence, while the flattened
 `Vec` representation does not have this limitation. Without flattening domains,
-the only way to represent such a river would be to support multiple root
+the only way to represent such a River would be to support multiple root
 domains, in which case the shape information would be lost entirely.
 
 #### Formal description
 
-We define river $R$ as an ordered tree of so-called domains. Each domain $X$
+River $R$ is defined as an ordered tree of so-called domains. Each domain $X$
 is a triple of an identifier, a tuple containing zero or more streams, and a
 flattening flag:
 
@@ -747,7 +747,7 @@ Finally, each field is described by an identifier and a bit-width:
 
 $F = ( I_F, n )$
 
-A river maps to one or more physical OpenTide streams by means of preorder
+A River maps to one or more physical OpenTide streams by means of preorder
 depth-first traversal of the domains, concatenating the streams encountered.
 The $M$ parameter of each stream is defined by the sum of the bit-widths of
 its fields. The $D$ parameter is determined by counting the number of domains
@@ -759,8 +759,8 @@ the designer.
 
 ### Type construction
 
-We define two sets of equivalent grammars to recursively describe or construct
-the type of a river, one intended to be human readable/writable, and one that
+Two sets of equivalent grammars are defined to recursively describe or construct
+the type of a River, one intended to be human readable/writable, and one that
 uses only case-insensitive alphanumerical characters and underscores such that
 it can be embedded into an identifier. The latter serves a similar purpose as
 name mangling does in C++: to allow generative tools to embed type information
@@ -831,7 +831,7 @@ A bitfield represents any higher-level datatype that can be represented with a
 nonzero, fixed number of bits. What kind of value is represented by the
 bitfield and how is out of the scope of this layer of the specification.
 
-The described river consists of a single domain $X$, with
+The described River consists of a single domain $X$, with
 
 $X = ( \varnothing{}, ( S_0 ), 0 )$
 
@@ -847,10 +847,10 @@ where $n$ is the positive number of bits defined by the rule.
 sequence = "[" , river , "]" ;
 ```
 
-The sequence operator transforms a river data type into a sequence thereof by
+The sequence operator transforms a River data type into a sequence thereof by
 adding a domain.
 
-The described river consists of a new root domain $X$, with
+The described River consists of a new root domain $X$, with
 
 $X = ( \varnothing{}, \varnothing{}, 0 )$
 
@@ -862,14 +862,14 @@ The domain tree from the child type is added as a child of $X$.
 flatten = "-" , river , "-" ;
 ```
 
-The flattening operator indicates that the child river type is a flattened
+The flattening operator indicates that the child River type is a flattened
 representation of a new root domain. That is, all `last` flags of the root
 domain are removed. Note that this operator is functionally no-op unless it is
 the descendant of a sequence operator; that is, the domain added by this
 operator does not *remain* the root.
 
 If the root domain of the child type is not flattened (its $f = 0$), the
-described river consists of a new root domain $X$, with
+described River consists of a new root domain $X$, with
 
 $X = ( \varnothing{}, \varnothing{}, 1 )$
 
@@ -887,13 +887,13 @@ reversibles = reversible , { "," , reversible } , [ "," ] ;
 bundle      = "|" , [ reversibles ] , "|" ;
 ```
 
-The bundling operator combines a number of child river types together into one.
+The bundling operator combines a number of child River types together into one.
 The logical datatype equivalent for this is a structure, tuple, or record, so
 the root domains of the child types are combined together. In the physical
-representation, the streams of the subrivers remain separated, so the transfers
+representation, the streams of the sub-Rivers remain separated, so the transfers
 that constitute the logical structure can occur in different cycles.
 
-The direction of one or more of the subrivers can be reversed. This allows the
+The direction of one or more of the sub-Rivers can be reversed. This allows the
 sink to send back control information. For instance, a source may grant random
 access to a large vector to a sink by allowing the sink to send it a stream of
 indices, to which the source then replies with the data. When reversed streams
@@ -902,7 +902,7 @@ dependencies (specified later) are adhered to. Summarizing those dependencies
 briefly; if stream $S$ is listed before stream $S'$ in the type, stream $S$
 acts as a command stream for stream $S'$.
 
-The described river consists of root domain $X$, which is constructed by
+The described River consists of root domain $X$, which is constructed by
 merging the root domains of the child types $X_{0..n-1}$ into one. If the root
 of all the child types have the same value for $f$ (the flattening flag), the
 following holds:
@@ -924,7 +924,7 @@ together, and become descendents of the domain their roots were merged into.
 If a child type is reversed (by means of a caret prefix), the $r$ flag for
 all its streams is inverted.
 
-If the bundle operator has zero types as its input, it returns a null river,
+If the bundle operator has zero types as its input, it returns a null River,
 consisting only of root domain $X_\varnothing$, defined as
 
 $X_\varnothing = ( \varnothing{}, \varnothing{}, 0 )$
@@ -954,7 +954,7 @@ Note that it is possible to get a stream with zero fields this way. While it
 does not carry data, its handshake and control signals may still be relevant
 for the streamlets, therefore it is not pruned.
 
-If the tuple operator has zero types as its input, it returns a river with a
+If the tuple operator has zero types as its input, it returns a River with a
 single domain $X$, satisfying
 
 $X = ( \varnothing{}, ( S_\varnothing ), 0 )$
@@ -970,7 +970,7 @@ union      = "{" , [ rivers ] , "}" ;
 null-union = "{" , "0" , [ "," , rivers ] , "}" ;
 ```
 
-The union operators combine a number of child river types together into one;
+The union operators combine a number of child River types together into one;
 however, unlike tuples and bundles, only one of the child data types is valid
 at a time. The logical datatype equivalent for this is a union, option, or
 variant. Which data type is valid for each element is signified by an option ID
@@ -992,7 +992,7 @@ named = identifier , ":" , river ;
 
 
 
-### Physical representation of river types
+### Physical representation of River types
 
 
 
@@ -1059,7 +1059,7 @@ them to operate on.
 
 
 
-We define that a river $R$ consists of
+We define that a River $R$ consists of
 one or more streams $S_i$ and one or more domains $G_j$:
 
 $R = \{ S_{0..|S|-1}, G_{0..|G|-1} \}$
