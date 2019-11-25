@@ -709,7 +709,7 @@ for these streams is the same, but their data flows cannot logically be merged.
 Domains form a tree-like structure, where each added dimension adds a branch.
 For instance, both the previously mentioned domains may have the same parent
 domain, wherein the streams transfer data of the form $[k, l]$. Using the type
-notation (define more formally later), this structure would result from
+notation (defined more formally later), this structure would result from
 for instance `[([T], [U])]`.
 
 A special kind of domain, called a flattening domain is also defined. Such a
