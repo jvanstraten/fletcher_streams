@@ -295,17 +295,17 @@ transferred.
 
 The physical layer defines the following signals.
 
-| Name    | Origin | Width                     | Default   | Complexity condition |
-|---------|--------|---------------------------|-----------|----------------------|
-| `valid` | Source | *scalar*                  | `'1'`     |                      |
-| `ready` | Sink   | *scalar*                  | `'1'`     |                      |
-| `data`  | Source | $N \times M$              | all `'0'` |                      |
-| `last`  | Source | D                         | all `'1'` |                      |
-| `empty` | Source | *scalar*                  | `'0'`     | $C \ge 4$            |
-| `stai`  | Source | $\lceil \log_2{N} \rceil$ | 0         | $C \ge 7$            |
-| `endi`  | Source | $\lceil \log_2{N} \rceil$ | $N-1$     |                      |
-| `strb`  | Source | $N$                       | all `'1'` | $C \ge 8$            |
-| `user`  | Source | U                         | all `'0'` |                      |
+| Name    | Origin | Width                     | Default   | Condition          | Purpose                                                              |
+|---------|--------|---------------------------|-----------|--------------------|----------------------------------------------------------------------|
+| `valid` | Source | *scalar*                  | `'1'`     |                    | Stalling the data stream due to the source not being ready.          |
+| `ready` | Sink   | *scalar*                  | `'1'`     |                    | Stalling the data stream due to the sink not being ready.            |
+| `data`  | Source | $N \times M$              | all `'0'` | $M > 0$            | Data transfer of $N$ $M$-bit elements.                               |
+| `last`  | Source | $D$                       | all `'1'` | $D \ge 1$          | Indicating the last transfer for $D$ levels of nested packets.       |
+| `empty` | Source | *scalar*                  | `'0'`     | $C \ge 4$          | Encoding zero-length packets.                                        |
+| `stai`  | Source | $\lceil \log_2{N} \rceil$ | 0         | $C \ge 7$, $N > 1$ | Start index; encodes the index of the first valid element in `data`. |
+| `endi`  | Source | $\lceil \log_2{N} \rceil$ | $N-1$     | $N > 1$            | End index; encodes the index of the last valid element in `data`.    |
+| `strb`  | Source | $N$                       | all `'1'` | $C \ge 8$          | Strobe; encodes which lanes are valid.                               |
+| `user`  | Source | $U$                       | all `'0'` | $U > 0$            | Additional control information carried along with the stream.        |
 
 Streamlets must comply with the following rules for each stream interface.
 
@@ -602,7 +602,7 @@ At first glance, the `strb` signal appears to make `stai`, `endi`, and `empty`
 redundant, as the `strb` signal on its own can describe any lane utilization
 that can be described through those signals and more. The fact that AXI4-stream
 uses `TSTRB` (and `TKEEP`) for this purpose lends further credence to this
-thought. Nevertheless, `stai`, `endi`, and `empty` are specified for the 
+thought. Nevertheless, `stai`, `endi`, and `empty` are specified for the
 following reasons.
 
  - Many data sources by design output on consecutive lanes, and thus have no
@@ -733,17 +733,18 @@ domains, in which case the shape information would be lost entirely.
 #### Formal description
 
 River $R$ is defined as an ordered tree of so-called domains. Each domain $X$
-is a triple of an identifier, a tuple containing zero or more streams, and a
-flattening flag:
+is a triple of an identifier $I$, a tuple containing zero or more streams $S$,
+and a boolean flattening flag $f$:
 
 $X = ( I_X, ( S_0, S_1, \cdots , S_{n-1} ), f )$
 
-Each stream is furthermore described by an identifier, a set of data fields,
-and a reverse-direction flag:
+Each stream is furthermore described by an identifier $I$, a set of data fields
+$F$, and a boolean reverse-direction flag $r$:
 
 $S = ( I_S, ( F_0, F_1, \cdots , F_{n-1} ) , r )$
 
-Finally, each field is described by an identifier and a bit-width:
+Finally, each field is described by an identifier $I$ and a positive bit-width
+$n$:
 
 $F = ( I_F, n )$
 
@@ -907,14 +908,14 @@ merging the root domains of the child types $X_{0..n-1}$ into one. If the root
 of all the child types have the same value for $f$ (the flattening flag), the
 following holds:
 
-$X = ( \varnothing{}, \prod\limits_{i=0}^{n-1} S_{X_i}, f_{X_0} )$
+$X = \left( \varnothing{}, \prod\limits_{i=0}^{n-1} S_{X_i}, f_{X_0} \right)$
 
 where $\prod$ signifies concatenation. If there are both child domains with
 $f = 0$ and $f = 1$, the following holds:
 
-$X = ( \varnothing{}, \prod\limits_{i=0}^{n-1} \left\{\begin{matrix} S_{X_i} & f_{X_i} = 0 \\ \varnothing & f_{X_i} = 1 \end{matrix}\right. , 0 )$
+$X = \left( \varnothing{}, \prod\limits_{i=0}^{n-1} \left\{\begin{array}{ll} S_{X_i} & f_{X_i} = 0 \\ \varnothing & f_{X_i} = 1 \end{array}\right. , 0 \right)$
 
-$X' = ( \varnothing{}, \prod\limits_{i=0}^{n-1} \left\{\begin{matrix} \varnothing & f_{X_i} = 0 \\ S_{X_i} & f_{X_i} = 1 \end{matrix}\right. , 1 )$
+$X' = \left( \varnothing{}, \prod\limits_{i=0}^{n-1} \left\{\begin{array}{ll} \varnothing & f_{X_i} = 0 \\ S_{X_i} & f_{X_i} = 1 \end{array}\right. , 1 \right)$
 
 where $X$ is the new root domain, and $X'$ is a child domain thereof.
 
@@ -941,7 +942,7 @@ these are merged together, while for a bundle they remain separate streams. The
 primary child streams $S_{X_{0..n-1}},0$ are merged into stream $S_{X,0}$ as
 follows:
 
-$S_{X,0} = ( \varnothing{}, \prod\limits_{i=0}^{n-1} \left\{\begin{matrix} \varnothing & |S_{X_i}| = 0 \vee r_{X_i,0} = 1 \\ F_{X_i,0} & |S_{X_i}| > 0 \wedge r_{X_i,0} = 0 \end{matrix}\right. , 0 )$
+$S_{X,0} = \left( \varnothing{}, \prod\limits_{i=0}^{n-1} \left\{\begin{array}{ll} \varnothing & |S_{X_i}| = 0 \vee r_{X_i,0} = 1 \\ F_{X_i,0} & |S_{X_i}| > 0 \wedge r_{X_i,0} = 0 \end{array}\right. , 0 \right)$
 
 That is, the field tuple of the merged stream is the concatenation of the field
 tuples of the first stream in the root domain of each child data type that has
@@ -976,13 +977,39 @@ at a time. The logical datatype equivalent for this is a union, option, or
 variant. Which data type is valid for each element is signified by an option ID
 field.
 
-...
+As with a tuple, the primary child streams $S_{X_{0..n-1}},0$ are merged
+together into stream $S_{X,0}$. This stream also contains the option ID field.
+The following holds for $S_{X,0}$:
+
+$S_{X,0} = ( \varnothing{}, ( F_{id}, F_{data} ), 0 )$
+
+where
+
+$F_{id} = ( \textup{``id''}, \lceil log_2 n' \rceil )$
+
+$F_{data} = \left( \varnothing{}, \max\limits_{i=0}^{n-1} \left\{\begin{array}{ll} 0 & |S_{X_i}| = 0 \vee r_{X_i,0} = 1 \\ M_{X_i},0 & |S_{X_i}| > 0 \wedge r_{X_i,0} = 0 \end{array}\right. \right)$
+
+in which $M_{X_i},0$ represents the implicit $M$ parameter of the primary child
+stream of child type $i$ (defined by the sum of the widths of its fields), and
+$n'$ represents the total number of options:
+
+$n' = \left\{\begin{array}{ll} n & \texttt{union} \\ n + 1 & \texttt{null-union}\end{array}\right.$
+
+The $F_{id}$ field carries the index of the child type of the current element.
+It is represented as a binary unsigned number, starting from 0. For nullable
+types, nulls are represented with type ID code 0, and the non-null type indices
+start at 1. Any representable type ID code greater than $n'$ is illegal.
+
+The $F_{data}$ field carries the LSB-first concatenation of the primary stream
+fields of the selected child data type, if any. This data is LSB-aligned. The
+value for any unused bits is undefined.
 
 The remaining streams and domains of the child types are represented as they
-would be in a bundle. However, **TODO**
-
-
-
+would be in a bundle. For each logical element transferred over the stream, no
+(sub)element(s) should be transferred on the deselected child streams. Note
+however that the `last` marker(s) on these streams cannot be removed or the
+meaning of the stream would change; empty transfers carrying the appropriate
+`last` marker may therefore need to inserted.
 
 #### Named
 
@@ -990,25 +1017,90 @@ would be in a bundle. However, **TODO**
 named = identifier , ":" , river ;
 ```
 
+The naming operator prefixes all domain, stream, and field identifiers in the
+child type ($I_{child}$) with the given identifier ($I_{prefix}$) as follows:
 
+$I = \left\{\begin{array}{ll} I_{prefix} & I_{child} = \varnothing \\ I_{prefix} \cdot \textup{``\_''} \cdot I_{child} & I_{child} \ne \varnothing \end{array}\right.$
 
-### Physical representation of River types
+The functional meaning of the type is not changed.
 
+### Physical representation
 
+The list of physical streams associated with a river data type is constructed
+by preorder depth-first traversal of the domain tree, concatenating the
+contained lists of streams as they are encountered. The streams are
+parameterized as follows:
+
+ - The $M$ parameter is set to the sum of the bit-widths of the fields of the
+   stream.
+
+ - The $D$ parameter is set to the number of domains traversed since the last
+   flattened domain or since the root domain. For example, observe the
+   following domain tree;
+
+   ```
+                         .---.
+                        / f=0 \
+                        \ D=0 /
+                         '---'
+                        /     \
+                       v       v
+                   .---.       .---.
+                  / f=0 \     / f=0 \
+                  \ D=1 /     \ D=1 /
+                   '---'       '---'
+                  /     \           \
+                 v       v           v
+             .---.       .---.       .---.
+            / f=0 \     / f=1 \     / f=0 \
+            \ D=2 /     \ D=0 /     \ D=2 /
+             '---'       '---'       '---'
+            / Stream 1        \     Stream 3
+           v                   v
+       .---.                   .---.
+      / f=0 \                 / f=0 \
+      \ D=3 /                 \ D=1 /
+       '---'                   '---'
+      Stream 0                Stream 2
+   ```
+   This tree is the result of for instance `|[|[|[b1],b1|],-[b1]-|],[[b1]]|`.
+   Note the order of the stream as well.
+
+ - The $N$, $C$, and $U$ parameters are left up to the implementation.
+
+ - The name of the stream is taken from its $I$ parameter in the river
+   representation.
+
+ - The name of the data fields, where applicable, is taken from the $I$
+   parameters of the data fields, minus the prefix it has in common with the
+   stream identifier (the stream identifier is always a common prefix of all
+   its field identifiers).
 
 
 #### Inter-stream dependencies
 
-
-
-
-
-
-
-
-
-
 # Random notes follow, WIP
+
+To avoid deadlocks, the following inter-stream dependencies must be observed.
+
+- A source may delay providing the first
+
+assume that the sink will not block any of the transfers
+relating to $\textup{gce}(i, i+j)$ on stream $i$ until it has seen the
+
+
+- A source must provide/validate the last transfer on stream $i$ before it is
+allowed to wait for the sink to handshake the first transfer on stream
+$i+j$, for all $i \ge 0 \wedge j \ge 1 \wedge i + j < n$. The "first" and
+"last" transfer here refer to the transfers containing the first/last
+transfers (including `last` marker) of the greatest common element in the
+two streams.
+
+- A sink may not depend on the completion of any transfer on stream $i+j$ to
+unblock a transfer on stream $i$, for all $i \ge 0 \wedge j \ge 1 \wedge i + j < n$.
+
+
+
 
 
 b<width>    -> bit field with the given width
