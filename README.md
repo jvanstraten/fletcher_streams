@@ -235,7 +235,7 @@ the nomenclature used in the remainder of this document.
     - *" batch* - a collection of transfers and elements delimited by a `last`
       signal for which the most significant bit is driven to `'1'` for the last
       transfer, but not for all other transfers. If the stream has zero `last`
-      signals ($D=0$), a batch is defined to equivalent to a single element.
+      signals ($D=0$), a batch is defined to be equivalent to a single element.
 
     - *" complexity* ($C$) - a number defining the set of guarantees
       made by the stream source about the structure of the transfers within
