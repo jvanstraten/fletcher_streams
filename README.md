@@ -1076,28 +1076,27 @@ parameterized as follows:
    stream identifier (the stream identifier is always a common prefix of all
    its field identifiers).
 
-
 #### Inter-stream dependencies
 
 # Random notes follow, WIP
 
 To avoid deadlocks, the following inter-stream dependencies must be observed.
 
-- A source may delay providing the first
+ - A source may delay providing the first
 
 assume that the sink will not block any of the transfers
-relating to $\textup{gce}(i, i+j)$ on stream $i$ until it has seen the
+   relating to $\textup{gce}(i, i+j)$ on stream $i$ until it has seen the
 
 
-- A source must provide/validate the last transfer on stream $i$ before it is
-allowed to wait for the sink to handshake the first transfer on stream
-$i+j$, for all $i \ge 0 \wedge j \ge 1 \wedge i + j < n$. The "first" and
-"last" transfer here refer to the transfers containing the first/last
-transfers (including `last` marker) of the greatest common element in the
-two streams.
+ - A source must provide/validate the last transfer on stream $i$ before it is
+   allowed to wait for the sink to handshake the first transfer on stream
+   $i+j$, for all $i \ge 0 \wedge j \ge 1 \wedge i + j < n$. The "first" and
+   "last" transfer here refer to the transfers containing the first/last
+   transfers (including `last` marker) of the greatest common element in the
+   two streams.
 
-- A sink may not depend on the completion of any transfer on stream $i+j$ to
-unblock a transfer on stream $i$, for all $i \ge 0 \wedge j \ge 1 \wedge i + j < n$.
+ - A sink may not depend on the completion of any transfer on stream $i+j$ to
+   unblock a transfer on stream $i$, for all $i \ge 0 \wedge j \ge 1 \wedge i + j < n$.
 
 
 
