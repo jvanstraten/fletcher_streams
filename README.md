@@ -748,16 +748,6 @@ $n$:
 
 $F = ( I_F, n )$
 
-A river maps to one or more physical OpenTide streams by means of preorder
-depth-first traversal of the domains, concatenating the streams encountered.
-The $M$ parameter of each stream is defined by the sum of the bit-widths of
-its fields. The $D$ parameter is determined by counting the number of domains
-that need to be traversed to get to either the root domain or a domain with
-the flattening flag set, such that a stream belonging to the root domain or
-a domain with the flattening flag set has $D = 0$. The remaining parameters do
-not relate to the type carried by the stream, and can thus be freely chosen by
-the designer.
-
 ### Type construction
 
 We define two sets of equivalent grammars to recursively describe or construct
