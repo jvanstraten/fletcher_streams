@@ -778,10 +778,10 @@ bitfield    = "b" , positive ;
 sequence    = "[" , river , "]" ;
 flatten     = "-" , river , "-" ;
 reverse     = "^" , river ;
-bundle      = "|" , [ rivers ] , "|" ;
-tuple       = "(" , [ rivers ] , ")" ;
-union       = "{" , rivers , "}" ;
-null-union  = "{" , "0" , [ "," , rivers ] , "}" ;
+bundle      = "|" , zom-rivers , "|" ;
+tuple       = "(" , zom-rivers , ")" ;
+union       = "{" , oom-rivers , "}" ;
+null-union  = "{" , "0" , [ "," , zom-rivers ] , "}" ;
 named       = identifier , ":" , river ;
 
 (* toplevel rule *)
@@ -789,8 +789,9 @@ river       = bitfield | sequence | flatten
             | reverse  | union    | null-union
             | tuple    | bundle   | named ;
 
-(* helper rule *)
-rivers      = river , { "," , river } , [ "," ] ;
+(* helper rules (oom = one or more; zom = zero or more) *)
+oom-rivers  = river , { "," , river } , [ "," ] ;
+zom-rivers  = [ oom-rivers ] ;
 ```
 
 The name-mangling representation has the same rules, but uses letters in place
@@ -805,10 +806,10 @@ bitfield    = positive ;
 sequence    = "s" , river ;
 flatten     = "f" , river ;
 reverse     = "r" , river ;
-bundle      = "b" , [ rivers ] , "e" ;
-tuple       = "t" , [ rivers ] , "e" ;
-union       = "u" , rivers , "e" ;
-null-union  = "n" , [ rivers ] , "e" ;
+bundle      = "b" , zom-rivers , "e" ;
+tuple       = "t" , zom-rivers , "e" ;
+union       = "u" , oom-rivers , "e" ;
+null-union  = "n" , zom-rivers , "e" ;
 named       = "_" , identifier , "_" , river ;
 
 (* toplevel rule *)
@@ -816,8 +817,9 @@ river       = bitfield | sequence | flatten
             | reverse  | union    | null-union
             | tuple    | bundle   | named ;
 
-(* helper rule *)
-rivers      = river , { "c" , river } ;
+(* helper rules (oom = one or more; zom = zero or more) *)
+oom-rivers  = river , { "c" , river } ;
+zom-rivers  = [ oom-rivers ] ;
 ```
 
 The following sections describe the semantics of the functional rules.
@@ -894,7 +896,7 @@ simply inverts the $r$ flag of all streams in all domains.
 #### Bundle
 
 ```ebnf
-bundle = "|" , [ rivers ] , "|" ;
+bundle = "|" , zom-rivers , "|" ;
 ```
 
 The bundling operator combines a number of child river types together into one.
@@ -930,7 +932,7 @@ $X_\varnothing = ( \varnothing{}, \varnothing{}, 0 )$
 #### Tuple
 
 ```ebnf
-tuple = "(" , [ rivers ] , ")" ;
+tuple = "(" , zom-rivers , ")" ;
 ```
 
 The tuple operator is very similar to the bundling operator. It only differs in
@@ -964,8 +966,8 @@ $S_\varnothing = ( \varnothing{}, \varnothing{}, 0 )$
 #### Union
 
 ```ebnf
-union      = "{" , rivers , "}" ;
-null-union = "{" , "0" , [ "," , rivers ] , "}" ;
+union      = "{" , oom-rivers , "}" ;
+null-union = "{" , "0" , [ "," , zom-rivers ] , "}" ;
 ```
 
 The union operators combine a number of child river types together into one;
@@ -1110,10 +1112,10 @@ bitfield    = "b" , positive ;
 sequence    = "[" , river , "]" ;
 flatten     = "-" , river , "-" ;
 reverse     = "^" , river ;
-bundle      = "|" , [ rivers ] , "|" ;
-tuple       = "(" , [ rivers ] , ")" ;
-union       = "{" , rivers , "}" ;
-null-union  = "{" , "0" , [ "," , rivers ] , "}" ;
+bundle      = "|" , zom-rivers , "|" ;
+tuple       = "(" , zom-rivers , ")" ;
+union       = "{" , oom-rivers , "}" ;
+null-union  = "{" , "0" , [ "," , zom-rivers ] , "}" ;
 named       = identifier , ":" , river ;
 
 (* logical type rule; maps to primitive types through templating *)
@@ -1135,9 +1137,10 @@ bindings    = identifier , { "," , identifier } , [ repetition ] , [ "," ] ;
 (* toplevel rule including type definitions *)
 type        = { definition } , river ;
 
-(* rules for lists of rivers *)
+(* rules for lists of rivers; TODO: must have at least one normal river or T+ in oom-rivers *)
 multi-river = river | ( identifier , repetition ) ;
-rivers      = multi-river , { "," , multi-river } , [ "," ] ;
+oom-rivers  = multi-river , { "," , multi-river } , [ "," ] ;
+zom-rivers  = [ oom-rivers ] ;
 ```
 
 where `positive` represents a positive integer with regular expression
