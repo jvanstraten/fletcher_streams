@@ -54,7 +54,7 @@ important to have a common interface standard to allow the primitive blocks to
 connect to each other. The de-facto standard for this has become the AMBA AXI4
 interface, designed by ARM for their microcontrollers and processors. Roughly
 speaking, AXI4 specifies an interface for device-to-memory connections (AXI4
-and AXI4-lite), and a streaming interface (AXI4-stream) for device-to-device
+and AXI4-lite), and a streaming interface (AXI4-stream) for intra-device
 connections.
 
 While AXI4 and AXI4-lite are of primary importance to processors due to their
@@ -104,7 +104,7 @@ Fletcher project had to devise its own data streaming format on top of the
 de-facto subset of AXI4-stream. Originally, this format was simply a means
 to an end, and therefore, not much thought was put into it. Particularly, as
 only Arrow-to-device interfaces (and back) were needed for the project, an
-interface designed specifically for device-to-device streaming is lacking; in
+interface designed specifically for intra-device streaming is lacking; in
 fact, depending on configuration, the reader and writer interfaces do not even
 match completely. Clearly, a standard for streaming complex data types between
 components is needed, both within the context of the Fletcher project, and
@@ -120,7 +120,7 @@ Goals
  - Defining a streaming format for complex data types in the context of FPGAs
    and, potentially, ASICs, where "complex data types" include:
 
-    * multi-dimensional sequences;
+    * multi-dimensional sequences of undefined length;
     * unions (a.k.a. variants);
     * structures such as tuples or records.
 
@@ -150,7 +150,7 @@ Non-goals
 
  - OpenTide streams have no notion of multi-endpoint network-on-chip-like
    structures. Adding source and destination addressing or other routing
-   information can be done through the user signal.
+   information can be done through the `user` signal.
 
  - The primitive data type in OpenTide is a group of bits. We leave the mapping
    from these bits to higher-order types such as numbers, characters, or
