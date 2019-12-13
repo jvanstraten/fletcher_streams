@@ -1081,6 +1081,14 @@ innermost common domain, for all $i \ge 0 \wedge j \ge 1 \wedge i + j < n$.
 
 # Random notes follow, WIP
 
+TODO:
+
+ - add flit/phit to definition
+ - fixed-length lists
+ - push non-empty vs normal lists to type spec, take it out of complexity spec
+ - batch -> instance
+
+
 Logical layer specification
 ---------------------------
 
