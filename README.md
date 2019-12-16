@@ -1087,6 +1087,9 @@ TODO:
  - fixed-length lists
  - push non-empty vs normal lists to type spec, take it out of complexity spec
  - batch -> instance
+ - tuple -> struct
+ - remove name mangling spec and in general any language-like things (named)
+ - last flags and signalling empty sublists
 
 
 Logical layer specification
