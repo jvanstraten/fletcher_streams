@@ -1,6 +1,6 @@
 # NOTE: WORK IN PROGRESS. NOT A REAL SPEC YET.
 
-OpenTide stream specification
+Tydi stream specification
 =============================
 
 Background and motivation
@@ -117,8 +117,13 @@ document.
 Goals
 -----
 
+TODO (johanpel):  We can remove specific mentions of FPGA or ASIC here. I added
+                  combination of because most things i found do some of this 
+                  but not combinations.
+
  - Defining a streaming format for complex data types in the context of FPGAs
-   and, potentially, ASICs, where "complex data types" include:
+   and, potentially, ASICs, where "complex data types" include any combination
+   of the following:
 
     * multi-dimensional sequences of undefined length;
     * unions (a.k.a. variants);
@@ -146,13 +151,13 @@ Non-goals
 
  - We do not intend to compete with the AXI4(-stream) specification.
    AXI4-stream is designed for streaming unstructured byte-oriented data;
-   OpenTide streams are for streaming structured, complex data types.
+   Tydi streams are for streaming structured, complex data types.
 
- - OpenTide streams have no notion of multi-endpoint network-on-chip-like
+ - Tydi streams have no notion of multi-endpoint network-on-chip-like
    structures. Adding source and destination addressing or other routing
    information can be done through the `user` signal.
 
- - The primitive data type in OpenTide is a group of bits. We leave the mapping
+ - The primitive data type in Tydi is a group of bits. We leave the mapping
    from these bits to higher-order types such as numbers, characters, or
    timestamps to existing specifications.
 
@@ -161,7 +166,7 @@ Document structure
 
 The remainder of this document consists of a definitions section for
 disambiguating the nomenclature used, followed by the specifications for the
-three layers of the complete OpenTide specification. These layers are the
+three layers of the complete Tydi specification. These layers are the
 physical layer, the primitive layer, and the logical layer. The physical layer
 describes the signals that comprise a single stream on a similar level to the
 AXI4-stream specification. The primitive layer builds on this by specifying how
@@ -182,21 +187,34 @@ the nomenclature used in the remainder of this document.
    design, with a single driver and one or more receivers.
 
     - *Scalar "* - a signal comprised of a single bit, equivalent to an
-      `std_logic` signal in VHDL.
+      `std_logic` signal in VHDL, or one `wire` in Verilog.
 
     - *Vector "* - a signal comprised of zero or more bits, equivalent to
-      an `std_logic_vector` in VHDL. Vector signals have a most significant and
-      least significant end, where the most significant end is written first
-      and has the highest indices. The least significant bit (if there is one)
-      always has index 0.
+      an `std_logic_vector` in VHDL, or a `wire[]` in Verilog. Vector 
+      signals have a most significant and least significant end, where the most
+      significant end is written first and has the highest indices. The least 
+      significant bit (if there is one) always has index 0.
 
- - *OpenTide stream* - a bundle of signals used to transfer logical data from
-   one source to one sink. OpenTide streams are specified by the OpenTide
+ - *Tydi stream* - a bundle of signals used to transfer logical data from
+   one source to one sink. Tydi streams are specified by the Tydi
    physical layer.
+   
+   TODO (johanpel): this is a physical stream in paper right? It might conflict 
+                    a bit because we call a "River" a logical stream in paper. 
+                    We should consider rename or at least define "logical data"
+                    first.
 
     - *" payload* - the collection of all signals that comprise the stream,
       with the exception of the `valid` and `ready` handshake signals. Further
       subdivided into the data, control, and user signals.
+      
+      TODO (johanpel): I would suggest here we subdivide into like paper:
+        flow control      - ready valid
+        elementary data   - element lanes
+        transfer metadata - end index, start index, strobe (but could also be 
+                                                            called control data)
+        dimensional data  - last (lanes) and empty (lanes)
+        user data
 
     - *" data signal* - the subset of the stream payload used to transfer
       the actual, logical data carried by the stream.
@@ -227,15 +245,25 @@ the nomenclature used in the remainder of this document.
     - *" transfer* - the completion of a single ready/valid handshake,
       causing the stream payload to logically be transferred from source to
       sink.
-
+      
     - *" packet* - a collection of transfers and elements delimited by a
       nonzero `last` signal driven for the last transfer and a zero `last`
       signal driven for all other transfers.
+      
+      TODO (johanpel): in paper shown in complexity level examples as 
+                       "innermost sequence". We could define this as a packet,
+                       but perhaps using a specific word to mean innermost 
+                       sequence is not necessary and worst case confusing with
+                       any previous notion of what a packet is?
 
     - *" batch* - a collection of transfers and elements delimited by a `last`
       signal for which the most significant bit is driven to `'1'` for the last
       transfer, but not for all other transfers. If the stream has zero `last`
       signals ($D=0$), a batch is defined to equivalent to a single element.
+      
+      TODO (johanpel): in paper shown in complexity level examples as
+                       "whole outermost instance", but we could just call it
+                       an instance.
 
     - *" complexity* ($C$) - a number defining the set of guarantees
       made by the stream source about the structure of the transfers within
@@ -253,16 +281,23 @@ the nomenclature used in the remainder of this document.
    source from sending additional transfers. This corresponds to asserting
    `ready` low.
 
- - *OpenTide River* - a bundle of OpenTide streams used to transfer primitive
+ - *Tydi River* - a bundle of Tydi streams used to transfer primitive
    or logical data from one source to one sink. Note that while all data
    streams flow from the source to the sink, control streams may exist that
    flow in the opposite direction.
+   
+   TODO (johanpel): in paper called a "logical stream" but we should keep
+                    river and explain it to be a "logical stream".
 
- - *Streamlet* - a component that operates on one or more OpenTide streams or
+ - *Streamlet* - a component that operates on one or more Tydi streams or
    rivers.
 
 Physical layer specification
 ----------------------------
+
+TODO (johanpel):  we could consider to use the top-down approach of paper; 
+                  start with types then show physical. I personally don't care
+                  for the specification, it can be either way.
 
 The physical layer describes the timing and representation of arbitrary data
 transferred from a data source to a data sink through a group of signals known
@@ -270,14 +305,14 @@ as a stream.
 
 ### Parameterization
 
-The signals that belong to an OpenTide stream are uniquely determined by the
+The signals that belong to an Tydi stream are uniquely determined by the
 following parameters:
+
+ - $E$: the bit-width of each data element; that is, the sum of the bit widths
+   of the data fields. Bounds: $E \in \mathbb{N}$.
 
  - $N$: the number of data elements in the data signal. Bounds:
    $N \in \mathbb{N}, N \ge 1$.
-
- - $M$: the bit-width of each data element; that is, the sum of the bit widths
-   of the data fields. Bounds: $M \in \mathbb{N}$.
 
  - $D$: the dimensionality of the elements relative to a batch. Bounds:
    $D \in \mathbb{N}$.
@@ -287,7 +322,7 @@ following parameters:
  - $C$: the complexity of the stream, described in the stream complexity
    section below.
 
-$M$ and $D$ together represent the type of data transferred by the stream,
+$E$ and $D$ together represent the type of data transferred by the stream,
 whereas $N$, $U$, and $C$ represent the way in which this data type is
 transferred.
 
@@ -299,9 +334,9 @@ The physical layer defines the following signals.
 |---------|--------|---------------------------|-----------|--------------------|----------------------------------------------------------------------|
 | `valid` | Source | *scalar*                  | `'1'`     |                    | Stalling the data stream due to the source not being ready.          |
 | `ready` | Sink   | *scalar*                  | `'1'`     |                    | Stalling the data stream due to the sink not being ready.            |
-| `data`  | Source | $N \times M$              | all `'0'` | $M > 0$            | Data transfer of $N$ $M$-bit elements.                               |
+| `data`  | Source | $N \times E$              | all `'0'` | $E > 0$            | Data transfer of $N$ $E$-bit elements.                               |
 | `last`  | Source | $D$                       | all `'1'` | $D \ge 1$          | Indicating the last transfer for $D$ levels of nested packets.       |
-| `empty` | Source | *scalar*                  | `'0'`     | $C \ge 4$          | Encoding zero-length packets.                                        |
+| `empty` | Source | *scalar*                  | `'0'`     | $C \ge 4$          | Encoding zero-length packets. TODO (johanpel): this needs to be revised |
 | `stai`  | Source | $\lceil \log_2{N} \rceil$ | 0         | $C \ge 7$, $N > 1$ | Start index; encodes the index of the first valid element in `data`. |
 | `endi`  | Source | $\lceil \log_2{N} \rceil$ | $N-1$     | $N > 1$            | End index; encodes the index of the last valid element in `data`.    |
 | `strb`  | Source | $N$                       | all `'1'` | $C \ge 8$          | Strobe; encodes which lanes are valid.                               |
@@ -346,7 +381,7 @@ can be connected to any sink with complexity $C' \ge C$ without glue logic or
 loss of functionality; equivalently, increasing the complexity parameter of a
 stream is said to be zero-cost (known as the compatibility requirement).
 
-Although only a single natural number suffices for the current OpenTide
+Although only a single natural number suffices for the current Tydi
 specification version, it may in the future consist of multiple
 period-separated integers (similar to a version number). The $\ge$ comparison
 used in the compatibility requirement is then defined to operate on the
@@ -358,6 +393,11 @@ match.
 For this version of the specification, the natural numbers 1 through 8 are used
 for the complexity number. The following rules are defined based on this
 number.
+
+TODO (johanpel):  In paper empties are not omitted anymore by selecting some C,
+                  but only depends on D. I think we agree on what we want here.
+                  We need to add the new highest complexity level where last 
+                  also has lanes.
 
  - $C < 8$: the `strb` signal is always all ones and is therefore omitted.
 
@@ -437,19 +477,28 @@ payload |=========<___________>=====<_____X_____>====
 #### `data`
 
 The `data` signal carries all the data transferred by the stream. It consists
-of a flattened array of size $N$ consisting of elements of bit-width $M$.
+of a flattened array of size $N$ consisting of elements of bit-width $E$.
 Within this context, the element subsets of the data vector are also known as
 lanes. Each element/lane can be further subdivided into zero or more named
 fields.
 
+TODO (johanpel): I would suggest to think about the following paragraph. 
+                 Representation of the fields in languages is implementation 
+                 and language specific and if we spec it, it will become a hard
+                 but rather vague requirement. I can imagine that you may want 
+                 to recommend or specify that IF it is flattened, it should be
+                 done like this. But I wouldn't want to say that you *must* 
+                 flatten it.
+                 (need to think about this a bit more maybe)
+
 To ensure compatibility across RTL languages and vendors, the `data` signal is
 represented on the streamlet interfaces as a simple vector signal of size
-$N \times M$ despite the above. The fields and elements are flattened
+$N \times E$ despite the above. The fields and elements are flattened
 element-index-major, LSB-first. Formally, the least significant bit of the
 field with index $f$ for lane $l$ is at the following bit position in the
 `data` vector:
 
-$l \times M + \sum_{i=0}^{f-1} |F_i|$
+$l \times E + \sum_{i=0}^{f-1} |F_i|$
 
 where $|F_i|$ denotes the bit-width of field $i$.
 
@@ -460,7 +509,7 @@ index for each field. In the latter case, the signal names should be of the
 form `<stream-name>_data_<field-name>` for consistency, and to prevent name
 conflicts in future version of this specification.
 
-The following rules apply the `data` signal(s).
+The following rules apply to the `data` signal(s).
 
  - Element lane $i$ of the `data` signal is don't-care in any of the following
    cases:
@@ -567,6 +616,10 @@ behind including all four of these signals in the specification.
 The `strb` signal is don't-care while `valid` is `'0'` or while `empty` is
 `'1'`.
 
+TODO (johanpel): here (or in the `strb vs. stai/end` section) we need to add 
+                 what strobe means at the highest complexity levels in 
+                 combination with the empty signal.
+
 #### `user`
 
 The `user` signal carries user-defined control information; that is,
@@ -652,6 +705,8 @@ any overhead induced by `stai` and `endi` is negligible.
 
 ### Arrays of streams
 
+TODO (johanpel): "can do so", but don't have to? or is it a req?
+
 Streamlets that take an indexable array of streams as input or output can do
 so by individually concatenating the stream signals into vectors, ordered
 LSB-first. For instance, an array of three streams will have a `valid` signal
@@ -660,13 +715,13 @@ vector of width three, and so on.
 Primitive layer specification
 -----------------------------
 
-This layer specifies how a group of OpenTide streams, known as a river, can be
+This layer specifies how a group of Tydi streams, known as a river, can be
 used to transfer complex nested types. The "primitive" in the name refers to
 the fact that such nested types are typically primitives in higher-order
 data-oriented languages.
 
-Looking back to the parameters of OpenTide streams, this layer only specifies
-the values for parameters $M$ and $D$. $M$ is described by way of a list of
+Looking back to the parameters of Tydi streams, this layer only specifies
+the values for parameters $E$ and $D$. $E$ is described by way of a list of
 fields, each with their own bit width. The remaining parameters are independent
 of the data transferred over the streams, and must be specified independently
 by the designer, based on the performance/area/complexity considerations of
@@ -729,6 +784,17 @@ each transfer can fundamentally carry at most one sequence, while the flattened
 `Vec` representation does not have this limitation. Without flattening domains,
 the only way to represent such a river would be to support multiple root
 domains, in which case the shape information would be lost entirely.
+
+TODO (johanpel): In the paper we used type trees in which what here is called
+                 domains is shown as big nested circles that form physical 
+                 streams and their nested child streams.
+                 It's a slightly different view. I think the view of 
+                 streamspace type trees as in the paper conveys all this info
+                 at once, plus more. 
+                 I would suggest to use only this view to project all these 
+                 concepts on. We need to remove the flattening thing described 
+                 in the last two paragraphs and weave in the formal description
+                 ahead:
 
 #### Formal description
 
@@ -978,7 +1044,7 @@ $F_{id} = ( \textup{``id''}, \lceil log_2 n' \rceil )$
 
 $F_{data} = \left( \varnothing{}, \max\limits_{i=0}^{n-1} \left\{\begin{array}{ll} 0 & |S_{X_i}| = 0 \vee r_{X_i,0} = 1 \\ M_{X_i},0 & |S_{X_i}| > 0 \wedge r_{X_i,0} = 0 \end{array}\right. \right)$
 
-in which $M_{X_i},0$ represents the implicit $M$ parameter of the primary child
+in which $M_{X_i},0$ represents the implicit $E$ parameter of the primary child
 stream of child type $i$ (defined by the sum of the widths of its fields), and
 $n'$ represents the total number of options:
 
@@ -1020,7 +1086,7 @@ by preorder depth-first traversal of the domain tree, concatenating the
 contained lists of streams as they are encountered. The streams are
 parameterized as follows:
 
- - The $M$ parameter is set to the sum of the bit-widths of the fields of the
+ - The $E$ parameter is set to the sum of the bit-widths of the fields of the
    stream.
 
  - The $D$ parameter is set to the number of domains traversed since the last
